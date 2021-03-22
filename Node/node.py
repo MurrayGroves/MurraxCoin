@@ -4,7 +4,9 @@ import aiofiles
 
 import requests
 import websockets
-
+import socket
+import aiohttp
+from aiohttp import web
 import os
 
 from Crypto.Signature import DSS
@@ -14,8 +16,13 @@ from Crypto.PublicKey import ECC
 entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]
 nodes = {}
 
-async def create(data):
-    address = data["address"]
+ip = -1
+myPort = -1
+
+async def await_coro_later(delay, coro, *args, **kwargs):
+    await asyncio.sleep(delay)
+    await coro(*args, **kwargs)
+
 
 async def balance(data):
     address = data["address"]
@@ -72,6 +79,15 @@ async def checkForPendingSend(data):
     response = {"type": "pendingSend", "link": "", "sendAmount": ""}
     return json.dumps(response)
 
+
+async def fetchNodes(data):
+    global nodes
+    nodeAddresses = ""
+    for node in nodes:
+        nodeAddresses = nodeAddresses + "|" + node
+
+    response = {"type": "confirm", "action": "fetchNodes", "nodes": nodeAddresses}
+    return json.dumps(response)
 
 async def getBlock(address, blockID):
     f = await aiofiles.open(f"Accounts/{address}")
@@ -206,6 +222,31 @@ async def receive(data):
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
 
+async def registerMyself(node):
+    global myPort
+    global ip
+    print(f"Registering with {node}")
+    websocket = await websockets.connect(node)
+    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}"}}')
+    resp = await websocket.recv()
+    if json.loads(resp)["type"] == "confirm":
+        print(f"Node registered with: {node}")
+        global nodes
+        nodes = {**nodes, **{node: websocket}}
+
+        await websocket.send('{"type": "fetchNodes"}')
+        newNodes = await websocket.recv()
+        print(newNodes)
+        newNodes = json.loads(newNodes)["nodes"].split("|")[1:]
+        print(newNodes)
+        for node in newNodes:
+            if node not in nodes and node != f"ws://{ip}:{myPort}":
+                await registerMyself(node)
+
+    else:
+        await websocket.close()
+        print(f"Failed to register with: {node}")
+
 
 async def send(data):
     signature = data["signature"]
@@ -270,9 +311,6 @@ async def incoming(websocket, path):
         if data["type"] == "ping":
             response = '{"type": "confirm", "action": "ping"}'
 
-        elif data["type"] == "create":
-            response = await create(data)
-
         elif data["type"] == "balance":
             response = await balance(data)
 
@@ -295,10 +333,12 @@ async def incoming(websocket, path):
             response = f'{{"type": "previous", "address": "{address}", "link": "{previous}"}}'
 
         elif data["type"] == "registerNode":
+            response = json.dumps({"type": "confirm", "action": "registerNode"})
             global nodes
             nodes = {**nodes, **{f"ws://{websocket.remote_address[0]}:{data['port']}": websocket}}
 
-            response = json.dumps({"type": "confirm", "action": "registerNode"})
+        elif data["type"] == "fetchNodes":
+            response = await fetchNodes(data)
 
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
@@ -309,47 +349,63 @@ async def incoming(websocket, path):
         await websocket.send(response)
 
 
+async def ledgerServer(websocket, url):
+    msg = await websocket.recv()
+    print(msg)
+
 # Check if node running on given url
 async def testWebsocket(url):
     try:
-        async with websockets.connect(url) as websocket:
-                await websocket.send('{"type": "ping"}')
-                resp = await websocket.recv()
+        websocket = await asyncio.wait_for(websockets.connect(url), 3)
+        await websocket.send('{"type": "ping"}')
+        await websocket.recv()
+        await websocket.close()
 
         return True
 
     except:
         return False
 
+async def run():
+    global ip
+    global myPort
+    # Get my public IP
+    async with aiohttp.ClientSession() as session:
+        async with session.get('https://api.ipify.org') as response:
+            ip = await response.text()
 
-ip = requests.get('https://api.ipify.org').text  # Get my public IP
-if asyncio.get_event_loop().run_until_complete(testWebsocket(f"ws://{ip}:6969")):
-    start_server = websockets.serve(incoming, "0.0.0.0", 5858)  # A node already exists on our network, so boot on the secondary port
-    myPort = 5858
-
-else:
-    start_server = websockets.serve(incoming, "0.0.0.0", 6969)  # No other nodes exist on our network, so boot on the primary port
-    myPort = 6969
-
-async def registerMyself(node):
-    websocket = await websockets.connect(node)
-    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}"}}')
-    resp = await websocket.recv()
-    if json.loads(resp)["type"] == "confirm":
-        print(f"Node registered with: {node}")
-        global nodes
-        nodes = {**nodes, **{node: websocket}}
+    if await testWebsocket(f"ws://{ip}:6969"):
+        await websockets.serve(incoming, "0.0.0.0", 5858)  # A node already exists on our network, so boot on the secondary port
+        myPort = 5858
 
     else:
-        print(f"Failed to register with: {node}")
+        await websockets.serve(incoming, "0.0.0.0", 6969)  # No other nodes exist on our network, so boot on the primary port
+        myPort = 6969
 
-for node in entrypoints:
-    if not asyncio.get_event_loop().run_until_complete(testWebsocket(node)):
-        print(f"Node not available: {node}")
-        continue
+    for node in entrypoints:
+        if not await testWebsocket(node):
+            print(f"Node not available: {node}")
+            continue
 
-    asyncio.get_event_loop().run_until_complete(registerMyself(node))
+        if socket.gethostbyname(node.replace("ws://", "").split(":")[0]) == ip and node.split(":")[2] == str(myPort):
+            print(f"I am that node!")
+            continue
 
-print(f"Booting on {ip}:{myPort}")
-asyncio.get_event_loop().run_until_complete(start_server)
-asyncio.get_event_loop().run_forever()
+        await registerMyself(node)
+        session = aiohttp.ClientSession()
+        response = await session.get(f'http://{node.replace("ws://", "").split(":")[0]}:{int(node.replace("ws://", "").split(":")[1]) + 1}')
+        await session.close()
+        print(await response.text())
+
+
+    print(f"Booting on {ip}:{myPort}")
+    print("farted")
+
+    await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
+
+    print("uh huh")
+
+    await asyncio.Event().wait()
+
+asyncio.run(run())
+
