@@ -129,3 +129,5 @@ dmypy.json
 *.pem
 
 Node/Accounts/
+
+Node/Accounts2/

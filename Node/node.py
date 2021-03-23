@@ -4,18 +4,32 @@ import aiofiles
 
 import requests
 import websockets
+import socket
+import aiohttp
 
 import os
+import random
 
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
 
 entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]
+ledgerDir = input("Ledger Directory:")
+if ledgerDir == "":
+    ledgerDir = "Accounts/"
+
+os.makedirs(ledgerDir, exist_ok=True)
+
 nodes = {}
 
-async def create(data):
-    address = data["address"]
+ip = -1
+myPort = -1
+
+async def await_coro_later(delay, coro, *args, **kwargs):
+    await asyncio.sleep(delay)
+    await coro(*args, **kwargs)
+
 
 async def balance(data):
     address = data["address"]
@@ -35,11 +49,11 @@ async def balance(data):
 async def checkForPendingSend(data):
     address = data["address"]
 
-    dir = os.listdir("Accounts")
+    dir = os.listdir(ledgerDir)
 
     received = []
     if address in dir:
-        f = await aiofiles.open("Accounts/" + address)
+        f = await aiofiles.open(ledgerDir + address)
         data = await f.read()
         await f.close()
 
@@ -53,7 +67,7 @@ async def checkForPendingSend(data):
                 received.append(block["link"])
 
     for i in dir:
-        f = await aiofiles.open(f"Accounts/{i}")
+        f = await aiofiles.open(f"{ledgerDir}{i}")
         blocks = await f.read()
         await f.close()
         blocks = blocks.splitlines()
@@ -73,8 +87,17 @@ async def checkForPendingSend(data):
     return json.dumps(response)
 
 
+async def fetchNodes(data):
+    global nodes
+    nodeAddresses = ""
+    for node in nodes:
+        nodeAddresses = nodeAddresses + "|" + node
+
+    response = {"type": "confirm", "action": "fetchNodes", "nodes": nodeAddresses}
+    return json.dumps(response)
+
 async def getBlock(address, blockID):
-    f = await aiofiles.open(f"Accounts/{address}")
+    f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
     await f.close()
     fileStr = fileStr.splitlines()
@@ -88,7 +111,7 @@ async def getBlock(address, blockID):
             return block
 
 async def getHead(address):
-    f = await aiofiles.open(f"Accounts/{address}")
+    f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
     await f.close()
     fileStr = fileStr.splitlines()
@@ -152,7 +175,7 @@ async def openAccount(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    f = await aiofiles.open(f"Accounts/{address}", "a+")
+    f = await aiofiles.open(f"{ledgerDir}{address}", "a+")
     await f.write(json.dumps(data))
     await f.close()
 
@@ -178,7 +201,7 @@ async def receive(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
         return toRespond
     
-    f = await aiofiles.open(f"Accounts/{address}")
+    f = await aiofiles.open(f"{ledgerDir}{address}")
     blocks = await f.read()
     await f.close()
     blocks = blocks.splitlines()
@@ -199,12 +222,42 @@ async def receive(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    f = await aiofiles.open(f"Accounts/{address}", "a")
+    f = await aiofiles.open(f"{ledgerDir}{address}", "a")
     await f.write("\n" + json.dumps(data))
     await f.close()
 
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
+
+async def registerMyself(node):
+    global myPort
+    global ip
+    print(f"Registering with {node}")
+    websocket = await websockets.connect(node)
+    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}"}}')
+    resp = await websocket.recv()
+    if json.loads(resp)["type"] == "confirm":
+        print(f"Node registered with: {node}")
+        global nodes
+        nodes = {**nodes, **{node: websocket}}
+
+        await websocket.send('{"type": "fetchNodes"}')
+        newNodes = await websocket.recv()
+        print(newNodes)
+        newNodes = json.loads(newNodes)["nodes"].split("|")[1:]
+        print(newNodes)
+        for node in newNodes:
+            nodeIP = node.replace("ws://", "").split(":")[0]
+            print(nodeIP)
+            print(myPort)
+            print(node.split(":")[2])
+            isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1") and str(myPort) == str(node.split(":")[2])
+            if node not in nodes and not isLocalMachine:
+                await registerMyself(node)
+
+    else:
+        await websocket.close()
+        print(f"Failed to register with: {node}")
 
 
 async def send(data):
@@ -229,7 +282,7 @@ async def send(data):
         return toRespond
 
     previous = head["id"]
-    f = await aiofiles.open(f"Accounts/{address}", "a")
+    f = await aiofiles.open(f"{ledgerDir}{address}", "a")
     await f.write("\n" + json.dumps(data))
     await f.close()
 
@@ -270,9 +323,6 @@ async def incoming(websocket, path):
         if data["type"] == "ping":
             response = '{"type": "confirm", "action": "ping"}'
 
-        elif data["type"] == "create":
-            response = await create(data)
-
         elif data["type"] == "balance":
             response = await balance(data)
 
@@ -295,10 +345,12 @@ async def incoming(websocket, path):
             response = f'{{"type": "previous", "address": "{address}", "link": "{previous}"}}'
 
         elif data["type"] == "registerNode":
+            response = json.dumps({"type": "confirm", "action": "registerNode"})
             global nodes
             nodes = {**nodes, **{f"ws://{websocket.remote_address[0]}:{data['port']}": websocket}}
 
-            response = json.dumps({"type": "confirm", "action": "registerNode"})
+        elif data["type"] == "fetchNodes":
+            response = await fetchNodes(data)
 
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
@@ -309,47 +361,104 @@ async def incoming(websocket, path):
         await websocket.send(response)
 
 
+async def ledgerServer(websocket, url):
+    for account in os.listdir(ledgerDir):
+        print(account)
+        await websocket.send(f"Account:{account}")
+        f = await aiofiles.open(ledgerDir + account)
+        toSend = await f.read()
+        await f.close()
+        for line in toSend.splitlines():
+            await websocket.send(line)
+
+    await websocket.send("ayothatsall")
+
+
+async def fetchLedger(node):
+    node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
+    websocket = await websockets.connect(node)
+
+    accounts = {}
+    msg = await websocket.recv()
+    while msg != "ayothatsall":
+        curAccount = msg.replace("Account:", "")
+        accounts[curAccount] = []
+        msg = await websocket.recv()
+        print(msg)
+        while "Account:" not in msg and "ayothatsall" not in msg:
+            accounts[curAccount].append(msg)
+            msg = await websocket.recv()
+            print(msg)
+
+    print(accounts)
+    for account in accounts:
+        toWrite = ""
+        for block in accounts[account]:
+            toWrite = toWrite + "\n" + block
+
+        toWrite = toWrite.replace("\n", "", 1)
+        f = await aiofiles.open(ledgerDir + account, "w+")
+        await f.write(toWrite)
+        await f.close()
+
 # Check if node running on given url
 async def testWebsocket(url):
     try:
-        async with websockets.connect(url) as websocket:
-                await websocket.send('{"type": "ping"}')
-                resp = await websocket.recv()
+        websocket = await asyncio.wait_for(websockets.connect(url), 3)
+        await websocket.send('{"type": "ping"}')
+        await websocket.recv()
+        await websocket.close()
 
         return True
 
     except:
         return False
 
+async def run():
+    global ip
+    global myPort
+    # Get my public IP
+    async with aiohttp.ClientSession() as session:
+        async with session.get('https://api.ipify.org') as response:
+            ip = await response.text()
 
-ip = requests.get('https://api.ipify.org').text  # Get my public IP
-if asyncio.get_event_loop().run_until_complete(testWebsocket(f"ws://{ip}:6969")):
-    start_server = websockets.serve(incoming, "0.0.0.0", 5858)  # A node already exists on our network, so boot on the secondary port
-    myPort = 5858
+    if await testWebsocket(f"ws://{ip}:6969"):
+        # A node already exists on our network, so boot on the secondary port
+        await websockets.serve(incoming, "0.0.0.0", 5858)
+        myPort = 5858
+        entrypoints.append(f"ws://{ip}:6969")
 
-else:
-    start_server = websockets.serve(incoming, "0.0.0.0", 6969)  # No other nodes exist on our network, so boot on the primary port
-    myPort = 6969
-
-async def registerMyself(node):
-    websocket = await websockets.connect(node)
-    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}"}}')
-    resp = await websocket.recv()
-    if json.loads(resp)["type"] == "confirm":
-        print(f"Node registered with: {node}")
-        global nodes
-        nodes = {**nodes, **{node: websocket}}
+    elif await testWebsocket(f"ws://localhost:6969"):
+        # A node already exists on our computer, so boot on the secondary port
+        await websockets.serve(incoming, "0.0.0.0", 5858)
+        myPort = 5858
+        entrypoints.append(f"ws://localhost:6969")
 
     else:
-        print(f"Failed to register with: {node}")
+        # No other nodes exist on our network, so boot on the primary port
+        await websockets.serve(incoming, "0.0.0.0", 6969)
+        myPort = 6969
 
-for node in entrypoints:
-    if not asyncio.get_event_loop().run_until_complete(testWebsocket(node)):
-        print(f"Node not available: {node}")
-        continue
+    for node in entrypoints:
+        if not await testWebsocket(node):
+            print(f"Node not available: {node}")
+            continue
 
-    asyncio.get_event_loop().run_until_complete(registerMyself(node))
+        nodeIP = node.replace("ws://", "").split(":")[0]
+        isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1") and str(myPort) == str(node.split(":")[2])
+        if isLocalMachine:
+            print(f"I am that node!")
+            continue
 
-print(f"Booting on {ip}:{myPort}")
-asyncio.get_event_loop().run_until_complete(start_server)
-asyncio.get_event_loop().run_forever()
+        await registerMyself(node)
+
+    if len(list(nodes.keys())) != 0:
+        await fetchLedger(random.choice(list(nodes.keys())))
+
+    print(f"Booting on {ip}:{myPort}")
+
+    await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
+    await asyncio.Event().wait()
+
+asyncio.run(run())
+
