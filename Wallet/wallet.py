@@ -3,6 +3,7 @@ import websockets
 import random
 import json
 import time
+
 from aioconsole import ainput
 
 from Crypto.PublicKey import ECC
@@ -14,8 +15,8 @@ privateFile = input("Private Key Path: ")
 
 async def ping(websocket):
     await websocket.send('{"type": "ping"}')
-        
     resp = await websocket.recv()
+    
     print(resp)
 
 async def genSignature(data, privateKey):
@@ -83,14 +84,12 @@ async def loop(websocket):
 
         if resp["type"] != "rejection":
             balance = int(resp["balance"])
-
         else:
             balance = 0
 
         if balance == 0:
             blockType = "open"
             previous = "0"*20
-
         else:
             blockType = "receive"
             await websocket.send(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
@@ -111,7 +110,7 @@ async def loop(websocket):
         await asyncio.sleep(5)
 
 async def main():
-    uri = "ws://qwhwdauhdasht.ddns.net:6969"
+    uri = "ws://files.ethn.me:443"
     websocket = await websockets.connect(uri)
     asyncio.create_task(loop(websocket))
 
