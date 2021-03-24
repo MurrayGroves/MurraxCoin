@@ -2,9 +2,7 @@ import asyncio
 import json
 import aiofiles
 
-import requests
 import websockets
-import socket
 import aiohttp
 
 import os
@@ -26,10 +24,6 @@ nodes = {}
 ip = -1
 myPort = -1
 
-async def await_coro_later(delay, coro, *args, **kwargs):
-    await asyncio.sleep(delay)
-    await coro(*args, **kwargs)
-
 
 async def balance(data):
     address = data["address"]
@@ -41,18 +35,16 @@ async def balance(data):
         response = f'{{"type": "rejection", "address": "{address}", "reason": "addressNonExistent"}}'
         return response
 
-    balance = block["balance"]
-
-    response = f'{{"type": "info", "address": "{address}", "balance": "{balance}" }}'
+    response = f'{{"type": "info", "address": "{address}", "balance": "{block["balance"]}" }}'
     return response
+
 
 async def checkForPendingSend(data):
     address = data["address"]
 
-    dir = os.listdir(ledgerDir)
-
     received = []
-    if address in dir:
+    accounts = os.listdir(ledgerDir)
+    if address in accounts:
         f = await aiofiles.open(ledgerDir + address)
         data = await f.read()
         await f.close()
@@ -66,7 +58,7 @@ async def checkForPendingSend(data):
             if block["type"] == "open":
                 received.append(block["link"])
 
-    for i in dir:
+    for i in accounts:
         f = await aiofiles.open(f"{ledgerDir}{i}")
         blocks = await f.read()
         await f.close()
@@ -78,16 +70,18 @@ async def checkForPendingSend(data):
 
             if block["type"] == "send":
                 if block["link"] == address:
-                    sendAmount = await getBlock(block["address"], block["previous"])
-                    sendAmount = int(sendAmount["balance"]) - int(block["balance"])
-                    response = json.dumps({"type": "pendingSend", "link": f"{block['address']}/{block['id']}", "sendAmount": sendAmount})
-                    return response
+                    amount = await getBlock(block["address"], block["previous"])
+                    amount = int(amount["balance"]) - int(block["balance"])
+
+                    resp = {"type": "pendingSend", "link": f"{block['address']}/{block['id']}", "sendAmount": amount}
+                    resp = json.dumps(resp)
+                    return resp
 
     response = {"type": "pendingSend", "link": "", "sendAmount": ""}
     return json.dumps(response)
 
 
-async def fetchNodes(data):
+async def fetchNodes():
     global nodes
     nodeAddresses = ""
     for node in nodes:
@@ -95,6 +89,7 @@ async def fetchNodes(data):
 
     response = {"type": "confirm", "action": "fetchNodes", "nodes": nodeAddresses}
     return json.dumps(response)
+
 
 async def getBlock(address, blockID):
     f = await aiofiles.open(f"{ledgerDir}{address}")
@@ -110,6 +105,7 @@ async def getBlock(address, blockID):
         if block["id"] == blockID:
             return block
 
+
 async def getHead(address):
     f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
@@ -124,19 +120,19 @@ async def getHead(address):
         return blocks[0]
 
     # Sort blocks in order
-    sorted = False
-    while not sorted:
-        sorted = True
+    isSorted = False
+    while not isSorted:
+        isSorted = True
         for i in range(1, len(blocks)):
             previous = blocks[i]["previous"]
-            if previous == "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000":
+            if previous == "0"*20:  # if broken, change to 145
                 blocks.insert(0, blocks.pop(i))
                 continue
 
             if blocks[i-1]["id"] == previous:
                 continue
 
-            sorted = False
+            isSorted = False
 
             for x in range(len(blocks)):
                 if blocks[x]["id"] == previous:
@@ -144,6 +140,7 @@ async def getHead(address):
                     break
 
     return blocks[-1]
+
 
 async def openAccount(data):
     signature = data["signature"]
@@ -158,7 +155,7 @@ async def openAccount(data):
     sendingAddress, sendingBlock = data["link"].split("/")
     sendingBlock = await getBlock(sendingAddress, sendingBlock)
 
-    # Check that send block is valid (just in case)
+    # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
@@ -175,12 +172,9 @@ async def openAccount(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    f = await aiofiles.open(f"{ledgerDir}{address}", "a+")
-    await f.write(json.dumps(data))
-    await f.close()
-
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
+
 
 async def receive(data):
     signature = data["signature"]
@@ -195,7 +189,7 @@ async def receive(data):
     sendingAddress, sendingBlock = data["link"].split("/")
     sendingBlock = await getBlock(sendingAddress, sendingBlock)
 
-    # Check that send block is valid (just in case)
+    # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
@@ -222,12 +216,9 @@ async def receive(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    f = await aiofiles.open(f"{ledgerDir}{address}", "a")
-    await f.write("\n" + json.dumps(data))
-    await f.close()
-
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
+
 
 async def registerMyself(node):
     global myPort
@@ -270,21 +261,10 @@ async def send(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
         return toRespond
 
-    destination = data["link"]
-    balance = data["balance"]
-
-    print(balance)
-
     head = await getHead(address)
-    print(int(head["balance"]))
-    if int(head["balance"]) < int(balance):
+    if int(head["balance"]) < int(data["balance"]):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
         return toRespond
-
-    previous = head["id"]
-    f = await aiofiles.open(f"{ledgerDir}{address}", "a")
-    await f.write("\n" + json.dumps(data))
-    await f.close()
 
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
@@ -304,7 +284,7 @@ async def verifySignature(signature, publicKey, data):
         verifier.verify(data, signature)
         return True
 
-    except Exception as e:
+    except ValueError:
         return False
 
 
@@ -328,15 +308,27 @@ async def incoming(websocket, path):
 
         elif data["type"] == "send":
             response = await send(data)
+            if json.loads(response)["type"] == "confirm":
+                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
+                await f.write(json.dumps(data))
+                await f.close()
 
         elif data["type"] == "pendingSend":
             response = await checkForPendingSend(data)
 
         elif data["type"] == "receive":
             response = await receive(data)
+            if json.loads(response)["type"] == "confirm":
+                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
+                await f.write(json.dumps(data))
+                await f.close()
 
         elif data["type"] == "open":
             response = await openAccount(data)
+            if json.loads(response)["type"] == "confirm":
+                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a+")
+                await f.write(json.dumps(data))
+                await f.close()
 
         elif data["type"] == "getPrevious":
             head = await getHead(data["address"])
@@ -350,20 +342,16 @@ async def incoming(websocket, path):
             nodes = {**nodes, **{f"ws://{websocket.remote_address[0]}:{data['port']}": websocket}}
 
         elif data["type"] == "fetchNodes":
-            response = await fetchNodes(data)
+            response = await fetchNodes()
 
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
-
-        if not response:
-            print(data)
 
         await websocket.send(response)
 
 
 async def ledgerServer(websocket, url):
     for account in os.listdir(ledgerDir):
-        print(account)
         await websocket.send(f"Account:{account}")
         f = await aiofiles.open(ledgerDir + account)
         toSend = await f.read()
@@ -384,13 +372,10 @@ async def fetchLedger(node):
         curAccount = msg.replace("Account:", "")
         accounts[curAccount] = []
         msg = await websocket.recv()
-        print(msg)
         while "Account:" not in msg and "ayothatsall" not in msg:
             accounts[curAccount].append(msg)
             msg = await websocket.recv()
-            print(msg)
 
-    print(accounts)
     for account in accounts:
         toWrite = ""
         for block in accounts[account]:
@@ -400,6 +385,7 @@ async def fetchLedger(node):
         f = await aiofiles.open(ledgerDir + account, "w+")
         await f.write(toWrite)
         await f.close()
+
 
 # Check if node running on given url
 async def testWebsocket(url):
@@ -413,6 +399,7 @@ async def testWebsocket(url):
 
     except:
         return False
+
 
 async def run():
     global ip
@@ -456,9 +443,7 @@ async def run():
         await fetchLedger(random.choice(list(nodes.keys())))
 
     print(f"Booting on {ip}:{myPort}")
-
     await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
     await asyncio.Event().wait()
 
 asyncio.run(run())
-
