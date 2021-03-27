@@ -4,6 +4,7 @@ import aiofiles
 
 import websockets
 import aiohttp
+import socket
 
 import os
 import random
@@ -25,6 +26,7 @@ ip = -1
 myPort = -1
 
 
+# Return an account's balance
 async def balance(data):
     address = data["address"]
 
@@ -39,6 +41,36 @@ async def balance(data):
     return response
 
 
+# Broadcast a verified transaction to other nodes
+async def broadcast(data):
+    broadcastID = str(random.randint(0, 99999999999999999999))
+    broadcastID = "0"*(20-len(broadcastID)) + broadcastID
+
+    validNodesStr = ""
+    validNodes = []
+    for node in nodes:
+        ws = nodes[node]
+        try:
+            await ws.send('{"type": "ping"}')
+            resp = await ws.recv()
+            if json.loads(resp)["type"] == "confirm":
+                print("Available", node)
+                validNodesStr = validNodesStr + "|" + node
+                validNodes.append(node)
+
+        except:
+            pass
+
+    packet = {"type": "broadcast", "broadCastID": broadcastID, "nodes": validNodesStr, "block": data}
+    for node in validNodes:
+        await nodes[node].send(json.dumps(packet))
+        resp = await nodes[node].recv()
+        if json.loads(resp)["type"] == "rejection":
+            print("Transaction rejected by ", node)
+            break
+
+
+# Return any send transactions that have not been received by an account
 async def checkForPendingSend(data):
     address = data["address"]
 
@@ -81,6 +113,7 @@ async def checkForPendingSend(data):
     return json.dumps(response)
 
 
+# Return a list of available nodes
 async def fetchNodes():
     global nodes
     nodeAddresses = ""
@@ -91,6 +124,7 @@ async def fetchNodes():
     return json.dumps(response)
 
 
+# Return a block belonging to the account (address) with block ID (blockID)
 async def getBlock(address, blockID):
     f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
@@ -105,7 +139,10 @@ async def getBlock(address, blockID):
         if block["id"] == blockID:
             return block
 
+    print("not found")
 
+
+# Get the head block of an account (the most recent block)
 async def getHead(address):
     f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
@@ -142,6 +179,7 @@ async def getHead(address):
     return blocks[-1]
 
 
+# Process an open transaction
 async def openAccount(data):
     signature = data["signature"]
     address = data["address"]
@@ -176,6 +214,7 @@ async def openAccount(data):
     return toRespond
 
 
+# Process a receive transaction
 async def receive(data):
     signature = data["signature"]
     address = data["address"]
@@ -220,6 +259,7 @@ async def receive(data):
     return toRespond
 
 
+# Register myself with specified node
 async def registerMyself(node):
     global myPort
     global ip
@@ -251,6 +291,7 @@ async def registerMyself(node):
         print(f"Failed to register with: {node}")
 
 
+# Processes a send transaction
 async def send(data):
     signature = data["signature"]
     address = data["address"]
@@ -266,10 +307,15 @@ async def send(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
         return toRespond
 
+    if head["id"] != data["previous"]:
+        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
+        return toRespond
+
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
     return toRespond
 
 
+# Verifies that data was created by stated account
 async def verifySignature(signature, publicKey, data):
     data = data.copy()
     data.pop("signature")
@@ -288,7 +334,123 @@ async def verifySignature(signature, publicKey, data):
         return False
 
 
+# Verify given block in dictionary accounts recursively
+async def verifyBlock(accounts, block, usedAsPrevious=[]):
+    if accounts[block["address"]][block["id"]][1]:
+        return True
+
+    # I need to clarify why this isn't "if not". "not None" returns True, but in this case I'm using the value None to represent a block which has no status yet and False to represent a block which has been rejected
+    if accounts[block["address"]][block["id"]][1] == False:
+        return False
+
+    # check if previous block is already cited as previous by another block
+    if (block["address"] + "/" + block["previous"]) in usedAsPrevious:
+        accounts[block["address"]][block["id"]][1] = False
+        print("previous already used")
+        return False
+
+    # verify signature
+    validSig = await verifySignature(block["signature"], block["address"], block)
+    if not validSig:
+        accounts[block["address"]][block["id"]][1] = False
+        print("invalid signature")
+        return False
+
+    if block["type"] != "open" and block["type"] != "genesis":
+        prevBlock = await getBlock(block["address"], block["previous"])
+
+    # if send block, verify previous block balance is more than current balance
+    if block["type"] == "send":
+        if int(prevBlock["balance"]) < int(block["balance"]):
+            accounts[block["address"]][block["id"]][1] = False
+            print("New balance is too large")
+            return False
+
+    # if receive/open block, calculate the send amount and check if the new balance matches
+    if block["type"] in ["receive", "open"]:
+        sendBlock = await getBlock(block["link"].split("/")[0], block["link"].split("/")[1])
+        sendPrevious = await getBlock(sendBlock["address"], sendBlock["previous"])
+        sendAmount = int(sendPrevious["balance"]) - int(sendBlock["balance"])
+
+        previousBalance = 0
+        if block["type"] == "receive":
+            previousBalance = int(prevBlock["balance"])
+
+        if block["balance"] != previousBalance + sendAmount:
+            accounts[block["address"]][block["id"]][1] = False
+            print("new balance mismatch")
+            return False
+
+        if not await verifyBlock(accounts, sendBlock, usedAsPrevious):
+            accounts[block["address"]][block["id"]][1] = False
+            print("invalid send block")
+            return False
+
+    if block["type"] == "genesis":
+        if block["signature"] != "0xc9052f33ef7690bf24171ec5c4f506caeee1ab88419dc6abc0644e6033f6c526ccff87f6bc8096b0463e38e3221c054b88938408fbaada4a6148d46d38daa52b":
+            accounts[block["address"]][block["id"]][1] = False
+            print("FAKE GENESIS DETECTED")
+            return False
+
+    if block["type"] == "open":
+        accounts[block["address"]][block["id"]][1] = True
+        print("Open Block Verified")
+        return True
+
+    if block["type"] == "genesis":
+        accounts[block["address"]][block["id"]][1] = True
+        print("Genesis Block Verified")
+        return True
+
+    if await verifyBlock(accounts, prevBlock, usedAsPrevious):
+        accounts[block["address"]][block["id"]][1] = True
+        print("Block Verified")
+        toReturn = True
+
+    else:
+        accounts[block["address"]][block["id"]][1] = False
+        print("Previous block is invalid")
+        toReturn = False
+
+    usedAsPrevious.append(block["address"] + "/" + prevBlock["id"])
+    return toReturn
+
+# Verifies EVERY transaction in the ledger (should probably only be called after downloading the ledger)
+async def verifyLedger():
+    accounts = {}
+    accountsDir = os.listdir(ledgerDir)
+    for account in accountsDir:
+        f = await aiofiles.open(ledgerDir + account)
+        data = await f.read()
+        await f.close()
+
+        blocks = {}
+        data = data.splitlines()
+        for block in data:
+            block = json.loads(block)
+            blocks[block["id"]] = [block, None]
+
+        accounts[account] = blocks
+
+    accountNames = accounts.keys()
+    for accountName in accountNames:
+        for block in accounts[accountName]:
+            block = accounts[accountName][block][0]
+            if accounts[accountName][block["id"]][1] == None:
+                await verifyBlock(accounts, block)
+
+    accountNames = accounts.keys()
+    for accountName in accountNames:
+        for block in accounts[accountName]:
+            if not accounts[accountName][block][1]:
+                print("BLOCK NOT VALID!!!!!")
+
+    print("Ledger Verified!")
+
+
+# Handles incoming websocket connections
 async def incoming(websocket, path):
+    global nodes
     print(f"Client Connected: {websocket.remote_address[0]}")
     while True:
         try:
@@ -296,6 +458,10 @@ async def incoming(websocket, path):
 
         except:
             print("Client Disconnected")
+            for node in nodes:
+                if websocket.remote_address[0] in node:
+                    nodes.pop(node)
+
             break
 
         print(data)
@@ -338,7 +504,6 @@ async def incoming(websocket, path):
 
         elif data["type"] == "registerNode":
             response = json.dumps({"type": "confirm", "action": "registerNode"})
-            global nodes
             nodes = {**nodes, **{f"ws://{websocket.remote_address[0]}:{data['port']}": websocket}}
 
         elif data["type"] == "fetchNodes":
@@ -350,6 +515,7 @@ async def incoming(websocket, path):
         await websocket.send(response)
 
 
+# Handles incoming ledger requests
 async def ledgerServer(websocket, url):
     for account in os.listdir(ledgerDir):
         await websocket.send(f"Account:{account}")
@@ -362,6 +528,7 @@ async def ledgerServer(websocket, url):
     await websocket.send("ayothatsall")
 
 
+# Fetches the ledger from the specified node
 async def fetchLedger(node):
     node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
     websocket = await websockets.connect(node)
@@ -401,6 +568,7 @@ async def testWebsocket(url):
         return False
 
 
+# Starts the node
 async def run():
     global ip
     global myPort
@@ -415,12 +583,6 @@ async def run():
         myPort = 5858
         entrypoints.append(f"ws://{ip}:6969")
 
-    elif await testWebsocket(f"ws://localhost:6969"):
-        # A node already exists on our computer, so boot on the secondary port
-        await websockets.serve(incoming, "0.0.0.0", 5858)
-        myPort = 5858
-        entrypoints.append(f"ws://localhost:6969")
-
     else:
         # No other nodes exist on our network, so boot on the primary port
         await websockets.serve(incoming, "0.0.0.0", 6969)
@@ -432,7 +594,8 @@ async def run():
             continue
 
         nodeIP = node.replace("ws://", "").split(":")[0]
-        isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1") and str(myPort) == str(node.split(":")[2])
+        nodeIP = socket.gethostbyname(nodeIP)
+        isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
         if isLocalMachine:
             print(f"I am that node!")
             continue
@@ -441,6 +604,8 @@ async def run():
 
     if len(list(nodes.keys())) != 0:
         await fetchLedger(random.choice(list(nodes.keys())))
+
+    await verifyLedger()
 
     print(f"Booting on {ip}:{myPort}")
     await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
