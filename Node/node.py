@@ -21,6 +21,7 @@ if ledgerDir == "":
 os.makedirs(ledgerDir, exist_ok=True)
 
 nodes = {}
+sendSubscriptions = {}
 
 ip = -1
 myPort = -1
@@ -239,6 +240,9 @@ async def receive(data):
     await f.close()
     blocks = blocks.splitlines()
     for block in blocks:
+        if json.loads(block)["type"] == "genesis":
+            continue
+
         if json.loads(block)["link"] == data["link"]:
             response = {"type": "rejection", "address": address, "id": blockID, "reason": "doubleReceive"}
             return json.dumps(response)
@@ -282,7 +286,7 @@ async def registerMyself(node):
             print(nodeIP)
             print(myPort)
             print(node.split(":")[2])
-            isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1") and str(myPort) == str(node.split(":")[2])
+            isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
             if node not in nodes and not isLocalMachine:
                 await registerMyself(node)
 
@@ -312,6 +316,15 @@ async def send(data):
         return toRespond
 
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
+    if data["destination"] in sendSubscriptions:
+        sendAlert = {"type": "sendAlert", "address": data["destination"],
+                     "sendAmount": str(float(head["balance"]) - float(data["balance"])),
+                     "link": f"{address}/{blockID}"}
+
+        sendAlert = json.dumps(sendAlert)
+        for ws in sendSubscriptions[data["destination"]]:
+            await ws.send(sendAlert)
+
     return toRespond
 
 
@@ -427,6 +440,7 @@ async def verifyLedger():
         blocks = {}
         data = data.splitlines()
         for block in data:
+            print(block)
             block = json.loads(block)
             blocks[block["id"]] = [block, None]
 
@@ -448,6 +462,24 @@ async def verifyLedger():
     print("Ledger Verified!")
 
 
+# Call to receive a notification whenever given address is sent new MXC
+async def watchForSends(data, ws):
+    global sendSubscriptions
+    address = data["address"]
+
+    try:
+        prevSubs = sendSubscriptions[address]
+
+    except KeyError:
+        prevSubs = []
+
+    prevSubs.append(ws)
+    sendSubscriptions[address] = prevSubs
+
+    resp = {"type": "confirm", "action": "watchForSends", "address": address}
+    return json.dumps(resp)
+
+
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
@@ -458,10 +490,6 @@ async def incoming(websocket, path):
 
         except:
             print("Client Disconnected")
-            for node in nodes:
-                if websocket.remote_address[0] in node:
-                    nodes.pop(node)
-
             break
 
         print(data)
@@ -509,6 +537,9 @@ async def incoming(websocket, path):
         elif data["type"] == "fetchNodes":
             response = await fetchNodes()
 
+        elif data["type"] == "watchForSends":
+            response = await watchForSends(data, websocket)
+
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
 
@@ -517,6 +548,7 @@ async def incoming(websocket, path):
 
 # Handles incoming ledger requests
 async def ledgerServer(websocket, url):
+    print("Ledger Requested")
     for account in os.listdir(ledgerDir):
         await websocket.send(f"Account:{account}")
         f = await aiofiles.open(ledgerDir + account)
@@ -531,6 +563,7 @@ async def ledgerServer(websocket, url):
 # Fetches the ledger from the specified node
 async def fetchLedger(node):
     node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
+    print(node)
     websocket = await websockets.connect(node)
 
     accounts = {}
@@ -602,6 +635,7 @@ async def run():
 
         await registerMyself(node)
 
+    print(nodes)
     if len(list(nodes.keys())) != 0:
         await fetchLedger(random.choice(list(nodes.keys())))
 

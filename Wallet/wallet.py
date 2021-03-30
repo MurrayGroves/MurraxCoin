@@ -61,62 +61,83 @@ publicKeyStr = publicKeyStr.replace("\n", " ")
 print(publicKeyStr)
 
 doBackgroundCheck = True
+websocket = None
 
-async def loop(websocket):
+
+async def receive(sendAmount, block):
+    global websocket
+
+    await websocket.send(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
+    resp = await websocket.recv()
+    resp = json.loads(resp)
+
+    if resp["type"] != "rejection":
+        balance = int(resp["balance"])
+
+    else:
+        balance = 0
+
+    if balance == 0:
+        blockType = "open"
+        previous = "0" * 20
+
+    else:
+        blockType = "receive"
+        await websocket.send(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
+        response = await websocket.recv()
+        previous = json.loads(response)["link"]
+
+    blockID = str(random.randint(0, 99999999999999999999))
+    blockID = "0" * (20 - len(blockID)) + blockID
+    block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}",
+             "link": f"{block}", "balance": balance + sendAmount}
+
+    signature = await genSignature(block, privateKey)
+    block = {**block, **{"signature": signature}}
+    await websocket.send(json.dumps(block))
+    resp = await websocket.recv()
+    resp = json.loads(resp)
+
+    if resp["type"] == "confirm":
+        receiveAmount = sendAmount
+        newBalance = block["balance"]
+        print(f"Received MXC: {receiveAmount}")
+        print(f"New Balance: {newBalance}")
+
+    else:
+        print("Failed to receive MXC!")
+        print(resp)
+
+
+async def sendAlert(data):
+    await receive(data["sendAmount"], data["link"])
+
+
+async def loop():
     while True:
         # Ok, so websockets don't link data at all. If this thread sends something while the main thread is doing something else, the main thread will get this response instead.
         if not doBackgroundCheck:
             await asyncio.sleep(5)
             continue
 
-        await websocket.send(f'{{"type": "pendingSend", "address": "{publicKeyStr}"}}')
-        response = await websocket.recv()
-        pendingSend = json.loads(response)
-
-        if pendingSend["link"] == "":
-            await asyncio.sleep(5)
-            continue
-
-        await websocket.send(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
-        resp = await websocket.recv()
-        resp = json.loads(resp)
-
-        if resp["type"] != "rejection":
-            balance = int(resp["balance"])
+        data = await websocket.recv()
+        data = json.loads(data)
+        if data["type"] == "sendAlert":
+            await sendAlert(data)
 
         else:
-            balance = 0
+            print("Unknown alert")
+            print(data)
 
-        if balance == 0:
-            blockType = "open"
-            previous = "0"*20
-
-        else:
-            blockType = "receive"
-            await websocket.send(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
-            response = await websocket.recv()
-            previous = json.loads(response)["link"]
-
-        link = pendingSend["link"]
-        blockID = str(random.randint(0, 99999999999999999999))
-        blockID = "0" * (20 - len(blockID)) + blockID
-        block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}", "link": f"{link}", "balance": balance+pendingSend["sendAmount"]}
-        signature = await genSignature(block, privateKey)
-        block = {**block, **{"signature": signature}}
-
-        await websocket.send(json.dumps(block))
-        resp = await websocket.recv()
-        print(resp)
-
-        await asyncio.sleep(5)
 
 async def main():
+    global websocket
     uri = "ws://qwhwdauhdasht.ddns.net:6969"
     websocket = await websockets.connect(uri)
-    asyncio.create_task(loop(websocket))
 
     global doBackgroundCheck
     doBackgroundCheck = False
+    asyncio.create_task(loop())
 
     await ping(websocket)
 
@@ -124,7 +145,6 @@ async def main():
     resp = await websocket.recv()
     resp = json.loads(resp)
 
-    doBackgroundCheck = True
 
     if resp["type"] != "rejection":
         balance = int(resp["balance"])
@@ -133,7 +153,19 @@ async def main():
         balance = 0
 
     print(f"Balance: {balance}")
+    req = {"type": "pendingSend", "address": publicKeyStr}
+    await websocket.send(json.dumps(req))
+    resp = await websocket.recv()
+    resp = json.loads(resp)
 
+    if resp["link"] != "":
+        await receive(resp["sendAmount"], resp["link"])
+
+    req = {"type": "watchForSends", "address": publicKeyStr}
+    await websocket.send(json.dumps(req))
+    resp = await websocket.recv()
+
+    doBackgroundCheck = True
     while True:
         sendAddress = await ainput("Send Address: ")
         toSend = await ainput("Amount to send: ")
