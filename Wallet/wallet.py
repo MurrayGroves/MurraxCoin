@@ -106,16 +106,31 @@ async def sendAlert(data):
 async def websocketPoolLoop():
     global websocketPool
     while True:
-        await asyncio.sleep(0.1)
-        for key in websocketPool.keys():
-            if websocketPool[key][1] == "":
-                await websocket.send(websocketPool[key][0])
-                resp = await websocket.recv()
+        await asyncio.sleep(0.3)
+        try:
+            resp = await asyncio.wait_for(websocket.recv(), 0.5)
+            if prevRequest == "":
                 if json.loads(resp)["type"] == "sendAlert":
-                    await sendAlert(resp)
-                    resp = await websocket.recv()  # Spam send requests may break this so it needs to be improved
+                    sendAlert(resp)
 
-                websocketPool[key][1] = resp
+                else:
+                    print("Unknown Alert")
+                    print(resp)
+
+                continue
+
+            else:
+                websocketPool[prevRequest][1] = resp
+
+        except:
+            pass
+
+        prevRequest = ""
+        if len(websocketPool.keys()) > 0:
+            poolKeys = list(websocketPool.keys())
+            if websocketPool[poolKeys[0]][1] == "":
+                await websocket.send(websocketPool[poolKeys[0]][0])
+                prevRequest = poolKeys[0]
 
 
 async def wsRequest(request):
