@@ -67,7 +67,7 @@ async def receive(sendAmount, block):
     resp = json.loads(resp)
 
     if resp["type"] != "rejection":
-        balance = int(resp["balance"])
+        balance = float(resp["balance"])
         blockType = "receive"
         response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
         previous = json.loads(response)["link"]
@@ -81,7 +81,7 @@ async def receive(sendAmount, block):
     blockID = str(random.randint(0, 99999999999999999999))
     blockID = "0" * (20 - len(blockID)) + blockID
     block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}",
-             "link": f"{block}", "balance": balance + sendAmount}
+             "link": f"{block}", "balance": balance + float(sendAmount)}
 
     signature = await genSignature(block, privateKey)
     block = {**block, **{"signature": signature}}
@@ -100,6 +100,7 @@ async def receive(sendAmount, block):
 
 
 async def sendAlert(data):
+    data = json.loads(data)
     await receive(data["sendAmount"], data["link"])
 
 
@@ -111,7 +112,7 @@ async def websocketPoolLoop():
             resp = await asyncio.wait_for(websocket.recv(), 0.5)
             if prevRequest == "":
                 if json.loads(resp)["type"] == "sendAlert":
-                    await sendAlert(resp)
+                    asyncio.create_task(sendAlert(resp))
 
                 else:
                     print("Unknown Alert")
@@ -163,7 +164,7 @@ async def main():
     resp = json.loads(resp)
 
     if resp["type"] != "rejection":
-        balance = int(resp["balance"])
+        balance = float(resp["balance"])
 
     else:
         balance = 0
