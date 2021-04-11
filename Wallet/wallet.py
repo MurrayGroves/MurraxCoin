@@ -111,7 +111,7 @@ async def websocketPoolLoop():
             resp = await asyncio.wait_for(websocket.recv(), 0.5)
             if prevRequest == "":
                 if json.loads(resp)["type"] == "sendAlert":
-                    sendAlert(resp)
+                    await sendAlert(resp)
 
                 else:
                     print("Unknown Alert")

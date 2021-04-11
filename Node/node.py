@@ -27,8 +27,9 @@ ip = -1
 myPort = -1
 
 
-# Return an account's balance
-async def balance(data):
+async def balance(data: dict) -> str:
+    """Returns an account's balance"""
+
     address = data["address"]
 
     try:
@@ -42,8 +43,9 @@ async def balance(data):
     return response
 
 
-# Broadcast a verified transaction to other nodes
 async def broadcast(data):
+    """Broadcast a verified transaction to other nodes"""
+
     broadcastID = str(random.randint(0, 99999999999999999999))
     broadcastID = "0"*(20-len(broadcastID)) + broadcastID
 
@@ -62,14 +64,25 @@ async def broadcast(data):
         except:
             pass
 
-    packet = {"type": "broadcast", "broadCastID": broadcastID, "nodes": validNodesStr, "block": data}
+    votes =
+
+    packet = {"type": "vote", "voteID": broadcastID, "nodes": validNodesStr, "block": data, "votes": votes}
     for node in validNodes:
         await nodes[node].send(json.dumps(packet))
-        resp = await nodes[node].recv()
-        if json.loads(resp)["type"] == "rejection":
-            print("Transaction rejected by ", node)
-            break
+        try:
+            resp = await asyncio.wait_for(nodes[node].recv(), 5)
+            resp = json.loads(resp)
+            if resp["type"] != "confirm" or resp["action"] != "vote":
+                raise Exception("Invalid response")
 
+            print("Vote received by ", node)
+
+        except TimeoutError:
+            print("Vote not received by ", node)
+
+        except Exception as e:
+            print("Exception while receiving vote response")
+            print(e)
 
 # Return any send transactions that have not been received by an account
 async def checkForPendingSend(data):
@@ -104,7 +117,7 @@ async def checkForPendingSend(data):
             if block["type"] == "send":
                 if block["link"] == address:
                     amount = await getBlock(block["address"], block["previous"])
-                    amount = int(amount["balance"]) - int(block["balance"])
+                    amount = float(amount["balance"]) - float(block["balance"])
 
                     resp = {"type": "pendingSend", "link": f"{block['address']}/{block['id']}", "sendAmount": amount}
                     resp = json.dumps(resp)
@@ -201,9 +214,9 @@ async def openAccount(data):
         return toRespond
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
-    sendAmount = int(previousBlock["balance"]) - int(sendingBlock["balance"])
+    sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
-    if int(data["balance"]) != int(sendAmount):
+    if float(data["balance"]) != float(sendAmount):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
         return toRespond
 
@@ -234,7 +247,7 @@ async def receive(data):
     if not valid:
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
         return toRespond
-    
+
     f = await aiofiles.open(f"{ledgerDir}{address}")
     blocks = await f.read()
     await f.close()
@@ -248,10 +261,10 @@ async def receive(data):
             return json.dumps(response)
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
-    sendAmount = previousBlock["balance"] - int(sendingBlock["balance"])
+    sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
     head = await getHead(address)
-    if int(data["balance"]) != int(head["balance"]) + int(sendAmount):
+    if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
         return toRespond
 
@@ -307,7 +320,7 @@ async def send(data):
         return toRespond
 
     head = await getHead(address)
-    if int(head["balance"]) < int(data["balance"]):
+    if float(head["balance"]) < float(data["balance"]):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
         return toRespond
 
@@ -316,14 +329,18 @@ async def send(data):
         return toRespond
 
     toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
-    if data["destination"] in sendSubscriptions:
-        sendAlert = {"type": "sendAlert", "address": data["destination"],
+    if data["link"] in sendSubscriptions:
+        sendAlert = {"type": "sendAlert", "address": data["link"],
                      "sendAmount": str(float(head["balance"]) - float(data["balance"])),
                      "link": f"{address}/{blockID}"}
 
         sendAlert = json.dumps(sendAlert)
-        for ws in sendSubscriptions[data["destination"]]:
-            await ws.send(sendAlert)
+        for ws in sendSubscriptions[data["link"]]:
+            try:
+                await ws.send(sendAlert)
+
+            except websockets.exceptions.ConnectionClosedError:
+                pass
 
     return toRespond
 
@@ -374,7 +391,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
 
     # if send block, verify previous block balance is more than current balance
     if block["type"] == "send":
-        if int(prevBlock["balance"]) < int(block["balance"]):
+        if float(prevBlock["balance"]) < float(block["balance"]):
             accounts[block["address"]][block["id"]][1] = False
             print("New balance is too large")
             return False
@@ -383,11 +400,11 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
     if block["type"] in ["receive", "open"]:
         sendBlock = await getBlock(block["link"].split("/")[0], block["link"].split("/")[1])
         sendPrevious = await getBlock(sendBlock["address"], sendBlock["previous"])
-        sendAmount = int(sendPrevious["balance"]) - int(sendBlock["balance"])
+        sendAmount = float(sendPrevious["balance"]) - float(sendBlock["balance"])
 
         previousBalance = 0
         if block["type"] == "receive":
-            previousBalance = int(prevBlock["balance"])
+            previousBalance = float(prevBlock["balance"])
 
         if block["balance"] != previousBalance + sendAmount:
             accounts[block["address"]][block["id"]][1] = False
@@ -504,7 +521,7 @@ async def incoming(websocket, path):
             response = await send(data)
             if json.loads(response)["type"] == "confirm":
                 f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
-                await f.write(json.dumps(data))
+                await f.write("\n" + json.dumps(data))
                 await f.close()
 
         elif data["type"] == "pendingSend":
@@ -514,7 +531,7 @@ async def incoming(websocket, path):
             response = await receive(data)
             if json.loads(response)["type"] == "confirm":
                 f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
-                await f.write(json.dumps(data))
+                await f.write("\n" + json.dumps(data))
                 await f.close()
 
         elif data["type"] == "open":
