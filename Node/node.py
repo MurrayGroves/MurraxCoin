@@ -13,16 +13,49 @@ from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
 
-entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]
-ledgerDir = input("Ledger Directory:")
-if ledgerDir == "":
-    ledgerDir = "Accounts/"
+# Configuration Variables
+entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]  # List of known nodes that can be used to "enter" the network.
+ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
+publicFile = "public_key.pem"  # Path of the node's public key
+privateFile = "private_key.pem"  # Path of the node's private key
+consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
+# Import node's private key
+f = open(privateFile, "rt")
+privateKey = ECC.import_key(f.read())
+f.close()
+
+# Import node's private key
+f = open(publicFile, "rt")
+publicKey = ECC.import_key(f.read())
+f.close()
+
+# Get a nicer representation of the public key
+publicKeyStr = publicKey.export_key(format="PEM", compress=True)
+publicKeyStr = publicKeyStr.replace("-----BEGIN PUBLIC KEY-----\n", "")
+publicKeyStr = publicKeyStr.replace("\n-----END PUBLIC KEY-----", "")
+publicKeyStr = publicKeyStr.replace("\n", " ")
+
+# Create the ledger directory
 os.makedirs(ledgerDir, exist_ok=True)
 
-nodes = {}
-sendSubscriptions = {}
+# Initialise global variables
+nodes = {}  # Dictionary of all connected nodes. Structure follows:
+            #   {ip : websocket}
+            #     ip - str - The IP/hostname that the node can be reached by. Includes port and "ws://" prefix
+            #     websocket - websockets.Websocket - the websocket that the node can be reached on.
 
+sendSubscriptions = {}  # Dictionary of nodes that should be alerted when an account is referenced in a send transaction. Structure follows:
+                        #   {address : [websocket,...]}
+                        #     address - str - MXC address that is being monitored
+                        #     websocket - websockets.Websocket - the websocket that the node can be reached on.
+
+votePool = {}   # Dictionary of all ongoing votes. Structure follows:
+                  # {voteID : [consensusWeight, block, [address,...]]}
+                    # voteID - Float - Randomly generated ID for each voting round.
+                    # consensusWeight - Float - Represents the value that the total voted weight must exceed for a block to be confirmed.
+                    # address - Str - The MXC address of the voting node.
+                    # voteWeight - Float - The voting weight of the voting node. Negative if voting against.
 ip = -1
 myPort = -1
 
@@ -64,16 +97,16 @@ async def broadcast(data):
         except:
             pass
 
-    votes =
-
-    packet = {"type": "vote", "voteID": broadcastID, "nodes": validNodesStr, "block": data, "votes": votes}
+    packet = {"type": "vote", "voteID": broadcastID, "block": data, "address": publicKeyStr}
+    signature = await genSignature(json.dumps(packet), privateKey)
+    packet["signature"] = signature
     for node in validNodes:
         await nodes[node].send(json.dumps(packet))
         try:
             resp = await asyncio.wait_for(nodes[node].recv(), 5)
             resp = json.loads(resp)
-            if resp["type"] != "confirm" or resp["action"] != "vote":
-                raise Exception("Invalid response")
+            if resp["type"] != "confirm":
+                raise Exception(f"Invalid response: {json.dumps(resp)}")
 
             print("Vote received by ", node)
 
@@ -83,6 +116,7 @@ async def broadcast(data):
         except Exception as e:
             print("Exception while receiving vote response")
             print(e)
+
 
 # Return any send transactions that have not been received by an account
 async def checkForPendingSend(data):
@@ -136,6 +170,19 @@ async def fetchNodes():
 
     response = {"type": "confirm", "action": "fetchNodes", "nodes": nodeAddresses}
     return json.dumps(response)
+
+
+async def genSignature(data, privateKey):
+    """ Sign data with private key"""
+
+    data = json.dumps(data)
+    signer = DSS.new(privateKey, "deterministic-rfc6979")
+    signatureHash = SHA256.new()
+    signatureHash.update(data.encode("utf-8"))
+    signature = signer.sign(signatureHash)
+    signature = hex(int.from_bytes(signature, "little"))
+
+    return signature
 
 
 # Return a block belonging to the account (address) with block ID (blockID)
@@ -479,8 +526,40 @@ async def verifyLedger():
     print("Ledger Verified!")
 
 
-# Call to receive a notification whenever given address is sent new MXC
+async def vote(data):
+    """ Called when receiving a vote.
+        1 - Validates block.
+        2 - Adds to local vote pool, even if invalid.
+        3 - If valid, transmit my vote to all nodes I am in contact with."""
+
+    data = json.loads(data)
+    blockType = json.loads(data["block"])["type"]
+    if blockType == "send":
+        resp = await send(data)
+
+    elif blockType == "receive":
+        resp = await receive(data)
+
+    elif blockType == "open":
+        resp = await open(data)
+
+    else:
+        print(f"Invalid Block Type: {blockType}")
+        return
+
+    if json.loads(resp)["type"] == "confirm":
+        valid = True
+        print(f"Incoming vote block is valid: {data['block']}")
+
+    else:
+        valid = False
+        print(f"Incoming vote block is invalid: {data['block']}")
+
+
 async def watchForSends(data, ws):
+    """ Allows a connection to receive notifications when a given address is sent new MXC.
+        Not persistently stored, needs to be re-called if node restarts."""
+
     global sendSubscriptions
     address = data["address"]
 
