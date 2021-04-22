@@ -1,3 +1,4 @@
+# imports
 import asyncio
 import websockets
 import random
@@ -9,15 +10,19 @@ from Crypto.PublicKey import ECC
 from Crypto.Hash import SHA256
 from Crypto.Signature import DSS
 
+# variable
+
 publicFile = input("Public Key Path: ")
 privateFile = input("Private Key Path: ")
 
+
+#function
 async def ping(websocket):
     await websocket.send('{"type": "ping"}')
         
     resp = await websocket.recv()
     print(resp)
-
+#function 2
 async def genSignature(data, privateKey):
     data = json.dumps(data)
     signer = DSS.new(privateKey, "deterministic-rfc6979")
@@ -28,7 +33,7 @@ async def genSignature(data, privateKey):
 
     return signature
 
-
+#try catch
 try:
     f = open(privateFile, "rt")
     privateKey = ECC.import_key(f.read())
