@@ -13,21 +13,58 @@ from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
 
-entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]
-ledgerDir = input("Ledger Directory:")
-if ledgerDir == "":
-    ledgerDir = "Accounts/"
+# Configuration Variables
+entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]  # List of known nodes that can be used to "enter" the network.
+ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
+publicFile = "../public_key.pem"  # Path of the node's public key
+privateFile = "../private_key.pem"  # Path of the node's private key
+consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
+# Import node's private key
+f = open(privateFile, "rt")
+privateKey = ECC.import_key(f.read())
+f.close()
+
+# Import node's public key
+f = open(publicFile, "rt")
+publicKey = ECC.import_key(f.read())
+f.close()
+
+# Get a nicer representation of the public key
+publicKeyStr = publicKey.export_key(format="PEM", compress=True)
+publicKeyStr = publicKeyStr.replace("-----BEGIN PUBLIC KEY-----\n", "")
+publicKeyStr = publicKeyStr.replace("\n-----END PUBLIC KEY-----", "")
+publicKeyStr = publicKeyStr.replace("\n", " ")
+
+# Create the ledger directory
 os.makedirs(ledgerDir, exist_ok=True)
 
-nodes = {}
+# Initialise global variables
+nodes = {}  # Dictionary of all connected nodes. Structure follows:
+            #   {ip : websocket}
+            #     ip - str - The IP/hostname that the node can be reached by. Includes port and "ws://" prefix
+            #     websocket - websockets.Websocket - the websocket that the node can be reached on.
+
+sendSubscriptions = {}  # Dictionary of nodes that should be alerted when an account is referenced in a send transaction. Structure follows:
+                        #   {address : [websocket,...]}
+                        #     address - str - MXC address that is being monitored
+                        #     websocket - websockets.Websocket - the websocket that the node can be reached on.
+
+votePool = {}   # Dictionary of all ongoing votes. Structure follows:
+                  # {voteID : [consensusWeight, block, [[address, weight],...]]}
+                    # voteID - Float - Randomly generated ID for each voting round.
+                    # consensusWeight - Float - Represents the value that the total voted weight must exceed for a block to be confirmed.
+                    # address - Str - The MXC address of the voting node.
+                    # weight - Float - The voting weight of the voting node. Negative if voting against.
 
 ip = -1
 myPort = -1
 
+votingWeights = {}
 
-# Return an account's balance
-async def balance(data):
+async def balance(data: dict) -> str:
+    """Returns an account's balance"""
+
     address = data["address"]
 
     try:
@@ -41,15 +78,16 @@ async def balance(data):
     return response
 
 
-# Broadcast a verified transaction to other nodes
 async def broadcast(data):
+    """Broadcast a verified transaction to other nodes"""
+
     broadcastID = str(random.randint(0, 99999999999999999999))
     broadcastID = "0"*(20-len(broadcastID)) + broadcastID
 
     validNodesStr = ""
     validNodes = []
     for node in nodes:
-        ws = nodes[node]
+        ws = nodes[node][0]
         try:
             await ws.send('{"type": "ping"}')
             resp = await ws.recv()
@@ -58,16 +96,48 @@ async def broadcast(data):
                 validNodesStr = validNodesStr + "|" + node
                 validNodes.append(node)
 
-        except:
+        except Exception as e:
+            print("Error: " + str(e))
             pass
 
-    packet = {"type": "broadcast", "broadCastID": broadcastID, "nodes": validNodesStr, "block": data}
+    packet = {"type": "vote", "voteID": broadcastID, "vote": "for", "block": data, "address": publicKeyStr}
+    signature = await genSignature(packet, privateKey)
+    print(signature)
+    print("Broadcast: " + json.dumps(packet))
+    packet["signature"] = signature
+
+    weight = await balance({"address": publicKeyStr})
+    weight = float(json.loads(weight)["balance"])
+
+    onlineWeight = 0
+    for node in nodes:
+        onlineWeight += nodes[node][2]
+
+    data = json.loads(data)
+    votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
+    if votePool[broadcastID][1] >= votePool[broadcastID][0]:
+        print("Consensus reached: " + str(votePool[broadcastID]))
+        f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
+        await f.write("\n" + json.dumps(data))
+        await f.close()
+        votePool[broadcastID][4] = True
+
     for node in validNodes:
-        await nodes[node].send(json.dumps(packet))
-        resp = await nodes[node].recv()
-        if json.loads(resp)["type"] == "rejection":
-            print("Transaction rejected by ", node)
-            break
+        await nodes[node][0].send(json.dumps(packet))
+        resp = await ws.recv()
+        try:
+            resp = json.loads(resp)
+            if resp["type"] != "confirm":
+                raise Exception(f"Invalid response: {json.dumps(resp)}")
+
+            print("Vote received by ", node)
+
+        except TimeoutError:
+            print("Vote not received by ", node)
+
+        except Exception as e:
+            print("Exception while receiving vote confirmation")
+            print(e)
 
 
 # Return any send transactions that have not been received by an account
@@ -103,7 +173,7 @@ async def checkForPendingSend(data):
             if block["type"] == "send":
                 if block["link"] == address:
                     amount = await getBlock(block["address"], block["previous"])
-                    amount = int(amount["balance"]) - int(block["balance"])
+                    amount = float(amount["balance"]) - float(block["balance"])
 
                     resp = {"type": "pendingSend", "link": f"{block['address']}/{block['id']}", "sendAmount": amount}
                     resp = json.dumps(resp)
@@ -111,6 +181,33 @@ async def checkForPendingSend(data):
 
     response = {"type": "pendingSend", "link": "", "sendAmount": ""}
     return json.dumps(response)
+
+
+async def change(data):
+    if type(data) == str:
+        data = json.loads(data)
+
+    signature = data["signature"]
+    address = data["address"]
+    blockID = data["id"]
+
+    valid = await verifySignature(signature, address, data)
+    if not valid:
+        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
+        return toRespond
+
+    previousBlock = await getBlock(address, data["previous"])
+    # Check that balance has not changed
+    if float(data["balance"]) != float(previousBlock["balance"]):
+        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
+        return toRespond
+
+    if data["representative"] not in os.listdir(ledgerDir):  # If account to be delegated to does not exist
+        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "link"}}'
+        return toRespond
+
+    toRespond = f'{{"type": "confirm", "action":"delegate","address": "{address}", "id": "{blockID}"}}'
+    return toRespond
 
 
 # Return a list of available nodes
@@ -124,6 +221,19 @@ async def fetchNodes():
     return json.dumps(response)
 
 
+async def genSignature(data, privateKey):
+    """ Sign data with private key"""
+
+    data = json.dumps(data)
+    signer = DSS.new(privateKey, "deterministic-rfc6979")
+    signatureHash = SHA256.new()
+    signatureHash.update(data.encode("utf-8"))
+    signature = signer.sign(signatureHash)
+    signature = hex(int.from_bytes(signature, "little"))
+
+    return signature
+
+
 # Return a block belonging to the account (address) with block ID (blockID)
 async def getBlock(address, blockID):
     f = await aiofiles.open(f"{ledgerDir}{address}")
@@ -133,6 +243,7 @@ async def getBlock(address, blockID):
 
     blocks = []
     for block in fileStr:
+        print(block)
         blocks.append(json.loads(block))
 
     for block in blocks:
@@ -141,6 +252,16 @@ async def getBlock(address, blockID):
 
     print("not found")
 
+
+async def getRepresentative(address):  # Get address of an account's representative
+    head = await getHead(address)
+    try:
+        representative = head["representative"]
+
+    except KeyError:
+        representative = address
+
+    return json.dumps({"type": "info", "address": address, "representative": representative})
 
 # Get the head block of an account (the most recent block)
 async def getHead(address):
@@ -181,6 +302,9 @@ async def getHead(address):
 
 # Process an open transaction
 async def openAccount(data):
+    if type(data) == str:
+        data = json.loads(data)
+
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
@@ -200,9 +324,9 @@ async def openAccount(data):
         return toRespond
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
-    sendAmount = int(previousBlock["balance"]) - int(sendingBlock["balance"])
+    sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
-    if int(data["balance"]) != int(sendAmount):
+    if float(data["balance"]) != float(sendAmount):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
         return toRespond
 
@@ -210,12 +334,15 @@ async def openAccount(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
+    toRespond = f'{{"type": "confirm", "action": "open","address": "{address}", "id": "{blockID}"}}'
     return toRespond
 
 
 # Process a receive transaction
 async def receive(data):
+    if type(data) == str:
+        data = json.loads(data)
+
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
@@ -233,21 +360,24 @@ async def receive(data):
     if not valid:
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
         return toRespond
-    
+
     f = await aiofiles.open(f"{ledgerDir}{address}")
     blocks = await f.read()
     await f.close()
     blocks = blocks.splitlines()
     for block in blocks:
+        if json.loads(block)["type"] == "genesis":
+            continue
+
         if json.loads(block)["link"] == data["link"]:
             response = {"type": "rejection", "address": address, "id": blockID, "reason": "doubleReceive"}
             return json.dumps(response)
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
-    sendAmount = previousBlock["balance"] - int(sendingBlock["balance"])
+    sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
     head = await getHead(address)
-    if int(data["balance"]) != int(head["balance"]) + int(sendAmount):
+    if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
         return toRespond
 
@@ -255,22 +385,22 @@ async def receive(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
+    toRespond = f'{{"type": "confirm", "action":"receive","address": "{address}", "id": "{blockID}"}}'
     return toRespond
 
 
 # Register myself with specified node
-async def registerMyself(node):
+async def registerMyself(node, doRespond):
     global myPort
     global ip
     print(f"Registering with {node}")
     websocket = await websockets.connect(node)
-    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}"}}')
+    await websocket.send(f'{{"type": "registerNode", "port": "{myPort}", "address": "{publicKeyStr}","respond": "{str(doRespond)}"}}')
     resp = await websocket.recv()
     if json.loads(resp)["type"] == "confirm":
         print(f"Node registered with: {node}")
         global nodes
-        nodes = {**nodes, **{node: websocket}}
+        nodes[node][0] = websocket
 
         await websocket.send('{"type": "fetchNodes"}')
         newNodes = await websocket.recv()
@@ -282,17 +412,22 @@ async def registerMyself(node):
             print(nodeIP)
             print(myPort)
             print(node.split(":")[2])
-            isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1") and str(myPort) == str(node.split(":")[2])
+            isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
             if node not in nodes and not isLocalMachine:
-                await registerMyself(node)
+                await registerMyself(node, doRespond=True)
 
     else:
         await websocket.close()
         print(f"Failed to register with: {node}")
 
+    print("Done registering")
+
 
 # Processes a send transaction
 async def send(data):
+    if type(data) == str:
+        data = json.loads(data)
+
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
@@ -303,7 +438,7 @@ async def send(data):
         return toRespond
 
     head = await getHead(address)
-    if int(head["balance"]) < int(data["balance"]):
+    if float(head["balance"]) < float(data["balance"]):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
         return toRespond
 
@@ -311,8 +446,46 @@ async def send(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
         return toRespond
 
-    toRespond = f'{{"type": "confirm", "address": "{address}", "id": "{blockID}"}}'
+    toRespond = f'{{"type": "confirm", "action":"send","address": "{address}", "id": "{blockID}"}}'
+    if data["link"] in sendSubscriptions:
+        sendAlert = {"type": "sendAlert", "address": data["link"],
+                     "sendAmount": str(float(head["balance"]) - float(data["balance"])),
+                     "link": f"{address}/{blockID}"}
+
+        sendAlert = json.dumps(sendAlert)
+        for ws in sendSubscriptions[data["link"]]:
+            try:
+                await ws.send(sendAlert)
+
+            except websockets.exceptions.ConnectionClosedError:
+                pass
+
     return toRespond
+
+
+async def updateVotingWeights():  # Updates the voting weights for all accounts which have been delegated to
+    global votingWeights
+    votingWeights = {}
+    for account in os.listdir(ledgerDir):
+        head = await getHead(account)
+        try:
+            representative = head["representative"]
+
+        except KeyError:
+            representative = account
+
+        if representative in votingWeights:
+            votingWeights[representative] += float(head["balance"])
+
+        else:
+            votingWeights[representative] = float(head["balance"])
+
+    for node in nodes:
+        try:
+            nodes[node][2] = votingWeights[nodes[node][1]]
+
+        except KeyError:  # No one has delegated voting weight to the node
+            nodes[node][2] = 0
 
 
 # Verifies that data was created by stated account
@@ -361,7 +534,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
 
     # if send block, verify previous block balance is more than current balance
     if block["type"] == "send":
-        if int(prevBlock["balance"]) < int(block["balance"]):
+        if float(prevBlock["balance"]) < float(block["balance"]):
             accounts[block["address"]][block["id"]][1] = False
             print("New balance is too large")
             return False
@@ -370,11 +543,11 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
     if block["type"] in ["receive", "open"]:
         sendBlock = await getBlock(block["link"].split("/")[0], block["link"].split("/")[1])
         sendPrevious = await getBlock(sendBlock["address"], sendBlock["previous"])
-        sendAmount = int(sendPrevious["balance"]) - int(sendBlock["balance"])
+        sendAmount = float(sendPrevious["balance"]) - float(sendBlock["balance"])
 
         previousBalance = 0
         if block["type"] == "receive":
-            previousBalance = int(prevBlock["balance"])
+            previousBalance = float(prevBlock["balance"])
 
         if block["balance"] != previousBalance + sendAmount:
             accounts[block["address"]][block["id"]][1] = False
@@ -427,6 +600,7 @@ async def verifyLedger():
         blocks = {}
         data = data.splitlines()
         for block in data:
+            print(block)
             block = json.loads(block)
             blocks[block["id"]] = [block, None]
 
@@ -448,6 +622,162 @@ async def verifyLedger():
     print("Ledger Verified!")
 
 
+async def vote(data):
+    """ Called when receiving a vote.
+        1 - Validates block.
+        2 - Adds to local vote pool, even if invalid.
+        3 - Transmit my vote to all nodes I am in contact with."""
+
+    data = json.loads(data)
+
+    valid = await verifySignature(data["signature"], data["address"], data)
+    if not valid:
+        return json.dumps({"type": "rejection", "action": "vote", "reason": "signature"})
+
+    for node in nodes:
+        if nodes[node][1] == data["address"]:
+            weight = nodes[node][2]
+            break
+
+    if data["vote"] == "against":
+        weight *= -1
+
+    print("VoteID: " + data["voteID"])
+    print(votePool.keys())
+    print(data["voteID"] in votePool)
+    if data["voteID"] in votePool:  # Vote is already in pool so just update
+        for ballot in votePool[data["voteID"]][3]:
+            if data["address"] == ballot[0]["address"]:  # Address has already voted
+                return json.dumps({"type": "rejection", "action": "vote", "reason": "double vote"})
+
+        votePool[data["voteID"]][1] += weight
+        votePool[data["voteID"]][3].append([data, weight])
+        if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
+            print("Consensus reached: " + str(votePool[data["voteID"]]))
+            f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
+            await f.write("\n" + data["block"])
+            await f.close()
+            votePool[data["voteID"]][4] = True
+
+        return json.dumps({"type": "confirm", "action": "vote"})
+
+    onlineWeight = 0
+    for node in nodes:
+        onlineWeight += nodes[node][2]
+    votePool[data["voteID"]] = [onlineWeight * consensusPercent, weight, json.loads(data["block"]), [[data, weight]], False]
+    if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
+        print("Consensus reached: " + str(votePool[data["voteID"]]))
+        f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
+        await f.write("\n" + data["block"])
+        await f.close()
+        votePool[data["voteID"]][4] = True
+
+    for ballot in votePool[data["voteID"]][3]:
+        if publicKeyStr == ballot[0]["address"]:  # Our address has already voted so do not cast a vote
+            return json.dumps({"type": "confirm", "action": "vote"})
+
+    blockType = json.loads(data["block"])["type"]
+    if blockType == "send":
+        resp = await send(data["block"])
+
+    elif blockType == "receive":
+        resp = await receive(data["block"])
+
+    elif blockType == "open":
+        resp = await openAccount(data["block"])
+
+    elif blockType == "change":
+        resp = await change(data["block"])
+
+    else:
+        print(f"Incoming vote block is of unknown type: {data['block']}")
+        resp = '{"type": "rejection"}'
+
+    if json.loads(resp)["type"] == "confirm":
+        valid = True
+        print(f"Incoming vote block is valid: {data['block']}")
+
+    else:
+        valid = False
+        print(f"Incoming vote block is invalid: {data['block']}")
+
+    if valid:
+        forAgainst = "for"
+
+    else:
+        forAgainst = "against"
+
+    packet = {"type": "vote", "voteID": data['voteID'], "vote": forAgainst, "block": data['block'], "address": publicKeyStr}
+    signature = await genSignature(packet, privateKey)
+    packet["signature"] = signature
+
+    votePool[data["voteID"]][1] += float(votingWeights[publicKeyStr])
+    votePool[data["voteID"]][3].append([packet, votingWeights[publicKeyStr]])
+
+    if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
+        print("Consensus reached: " + str(votePool[data["voteID"]]))
+        f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
+        await f.write("\n" + data["block"])
+        await f.close()
+        votePool[data["voteID"]][4] = True
+
+    validNodesStr = ""
+    validNodes = []
+    for node in nodes:
+        ws = nodes[node][0]
+        try:
+            await ws.send('{"type": "ping"}')
+            resp = await ws.recv()
+            if json.loads(resp)["type"] == "confirm":
+                print("Available", node)
+                validNodesStr = validNodesStr + "|" + node
+                validNodes.append(node)
+
+
+        except Exception as e:
+            print("Error: " + str(e))
+            pass
+
+    for node in validNodes:
+        await nodes[node][0].send(json.dumps(packet))
+        resp = await ws.recv()
+        try:
+            resp = json.loads(resp)
+            if resp["type"] != "confirm":
+                raise Exception(f"Invalid response: {json.dumps(resp)}")
+
+            print("Vote received by ", node)
+
+        except TimeoutError:
+            print("Vote not received by ", node)
+
+        except Exception as e:
+            print("Exception while receiving vote confirmation")
+            print(e)
+
+    return json.dumps({"type": "confirm", "action": "vote"})
+
+
+async def watchForSends(data, ws):
+    """ Allows a connection to receive notifications when a given address is sent new MXC.
+        Not persistently stored, needs to be re-called if node restarts."""
+
+    global sendSubscriptions
+    address = data["address"]
+
+    try:
+        prevSubs = sendSubscriptions[address]
+
+    except KeyError:
+        prevSubs = []
+
+    prevSubs.append(ws)
+    sendSubscriptions[address] = prevSubs
+
+    resp = {"type": "confirm", "action": "watchForSends", "address": address}
+    return json.dumps(resp)
+
+
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
@@ -458,14 +788,10 @@ async def incoming(websocket, path):
 
         except:
             print("Client Disconnected")
-            for node in nodes:
-                if websocket.remote_address[0] in node:
-                    nodes.pop(node)
-
             break
 
-        print(data)
         data = json.loads(data)
+        print(data)
         if data["type"] == "ping":
             response = '{"type": "confirm", "action": "ping"}'
 
@@ -475,9 +801,7 @@ async def incoming(websocket, path):
         elif data["type"] == "send":
             response = await send(data)
             if json.loads(response)["type"] == "confirm":
-                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
-                await f.write(json.dumps(data))
-                await f.close()
+                await broadcast(json.dumps(data))
 
         elif data["type"] == "pendingSend":
             response = await checkForPendingSend(data)
@@ -485,16 +809,12 @@ async def incoming(websocket, path):
         elif data["type"] == "receive":
             response = await receive(data)
             if json.loads(response)["type"] == "confirm":
-                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
-                await f.write(json.dumps(data))
-                await f.close()
+                await broadcast(json.dumps(data))
 
         elif data["type"] == "open":
             response = await openAccount(data)
             if json.loads(response)["type"] == "confirm":
-                f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a+")
-                await f.write(json.dumps(data))
-                await f.close()
+                await broadcast(json.dumps(data))
 
         elif data["type"] == "getPrevious":
             head = await getHead(data["address"])
@@ -504,10 +824,33 @@ async def incoming(websocket, path):
 
         elif data["type"] == "registerNode":
             response = json.dumps({"type": "confirm", "action": "registerNode"})
-            nodes = {**nodes, **{f"ws://{websocket.remote_address[0]}:{data['port']}": websocket}}
+            try:
+                weight = float(votingWeights[data["address"]])
+
+            except KeyError:  # No one has delegated the node's address
+                weight = 0
+
+            nodes[f"ws://{websocket.remote_address[0]}:{data['port']}"] = [None, data["address"], weight]
+            if data["respond"] == "True":
+                await registerMyself(f"ws://{websocket.remote_address[0]}:{data['port']}", doRespond=False)
 
         elif data["type"] == "fetchNodes":
             response = await fetchNodes()
+
+        elif data["type"] == "watchForSends":
+            response = await watchForSends(data, websocket)
+
+        elif data["type"] == "vote":
+            print("VOTING HAS BEGUN")
+            response = await vote(json.dumps(data))
+
+        elif data["type"] == "change":
+            response = await change(data)
+            if json.loads(response)["type"] == "confirm":
+                await broadcast(json.dumps(data))
+
+        elif data["type"] == "getRepresentative":
+            response = await getRepresentative(data["address"])
 
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
@@ -517,6 +860,7 @@ async def incoming(websocket, path):
 
 # Handles incoming ledger requests
 async def ledgerServer(websocket, url):
+    print("Ledger Requested")
     for account in os.listdir(ledgerDir):
         await websocket.send(f"Account:{account}")
         f = await aiofiles.open(ledgerDir + account)
@@ -531,6 +875,7 @@ async def ledgerServer(websocket, url):
 # Fetches the ledger from the specified node
 async def fetchLedger(node):
     node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
+    print(node)
     websocket = await websockets.connect(node)
 
     accounts = {}
@@ -577,11 +922,16 @@ async def run():
         async with session.get('https://api.ipify.org') as response:
             ip = await response.text()
 
+    await updateVotingWeights()
+
     if await testWebsocket(f"ws://{ip}:6969"):
         # A node already exists on our network, so boot on the secondary port
         await websockets.serve(incoming, "0.0.0.0", 5858)
+        print("running on secondary")
         myPort = 5858
         entrypoints.append(f"ws://{ip}:6969")
+        global ledgerDir
+        ledgerDir = "Accounts2/"
 
     else:
         # No other nodes exist on our network, so boot on the primary port
@@ -594,14 +944,16 @@ async def run():
             continue
 
         nodeIP = node.replace("ws://", "").split(":")[0]
+        nodePort = node.replace("ws://", "").split(":")[1]
         nodeIP = socket.gethostbyname(nodeIP)
         isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
         if isLocalMachine:
             print(f"I am that node!")
             continue
 
-        await registerMyself(node)
+        await registerMyself(f"ws://{nodeIP}:{nodePort}", doRespond=True)
 
+    print(nodes)
     if len(list(nodes.keys())) != 0:
         await fetchLedger(random.choice(list(nodes.keys())))
 
@@ -609,6 +961,7 @@ async def run():
 
     print(f"Booting on {ip}:{myPort}")
     await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
+    await updateVotingWeights()
     await asyncio.Event().wait()
 
 asyncio.run(run())

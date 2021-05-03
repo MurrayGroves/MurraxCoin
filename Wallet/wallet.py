@@ -2,7 +2,6 @@ import asyncio
 import websockets
 import random
 import json
-import time
 from aioconsole import ainput
 
 from Crypto.PublicKey import ECC
@@ -12,11 +11,8 @@ from Crypto.Signature import DSS
 publicFile = input("Public Key Path: ")
 privateFile = input("Private Key Path: ")
 
-async def ping(websocket):
-    await websocket.send('{"type": "ping"}')
-        
-    resp = await websocket.recv()
-    print(resp)
+websocketPool = {}
+
 
 async def genSignature(data, privateKey):
     data = json.dumps(data)
@@ -51,6 +47,8 @@ except:
     f.write(publicKey.export_key(format="PEM"))
     f.close()
 
+print(publicKey.export_key(format="PEM"))
+
 publicKeyStr = publicKey.export_key(format="PEM", compress=True)
 print("\n")
 print(publicKeyStr)
@@ -61,102 +59,179 @@ publicKeyStr = publicKeyStr.replace("\n", " ")
 print(publicKeyStr)
 
 doBackgroundCheck = True
+websocket = None
 
-async def loop(websocket):
-    while True:
-        # Ok, so websockets don't link data at all. If this thread sends something while the main thread is doing something else, the main thread will get this response instead.
-        if not doBackgroundCheck:
-            await asyncio.sleep(5)
-            continue
 
-        await websocket.send(f'{{"type": "pendingSend", "address": "{publicKeyStr}"}}')
-        response = await websocket.recv()
-        pendingSend = json.loads(response)
+async def receive(sendAmount, block):
+    global websocket
 
-        if pendingSend["link"] == "":
-            await asyncio.sleep(5)
-            continue
-
-        await websocket.send(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
-        resp = await websocket.recv()
-        resp = json.loads(resp)
-
-        if resp["type"] != "rejection":
-            balance = int(resp["balance"])
-
-        else:
-            balance = 0
-
-        if balance == 0:
-            blockType = "open"
-            previous = "0"*20
-
-        else:
-            blockType = "receive"
-            await websocket.send(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
-            response = await websocket.recv()
-            previous = json.loads(response)["link"]
-
-        link = pendingSend["link"]
-        blockID = str(random.randint(0, 99999999999999999999))
-        blockID = "0" * (20 - len(blockID)) + blockID
-        block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}", "link": f"{link}", "balance": balance+pendingSend["sendAmount"]}
-        signature = await genSignature(block, privateKey)
-        block = {**block, **{"signature": signature}}
-
-        await websocket.send(json.dumps(block))
-        resp = await websocket.recv()
-        print(resp)
-
-        await asyncio.sleep(5)
-
-async def main():
-    uri = "ws://qwhwdauhdasht.ddns.net:6969"
-    websocket = await websockets.connect(uri)
-    asyncio.create_task(loop(websocket))
-
-    global doBackgroundCheck
-    doBackgroundCheck = False
-
-    await ping(websocket)
-
-    await websocket.send(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
-    resp = await websocket.recv()
+    resp = await wsRequest(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
     resp = json.loads(resp)
 
-    doBackgroundCheck = True
+    if resp["type"] != "rejection":
+        balance = float(resp["balance"])
+        blockType = "receive"
+        response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
+        previous = json.loads(response)["link"]
+
+    else:
+        balance = 0
+        blockType = "open"
+        previous = "0" * 20
+
+    response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
+    representative = json.loads(response)["representative"]
+
+    blockID = str(random.randint(0, 99999999999999999999))
+    blockID = "0" * (20 - len(blockID)) + blockID
+    block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}",
+             "link": f"{block}", "balance": balance + float(sendAmount), "representative": representative}
+
+    signature = await genSignature(block, privateKey)
+    block = {**block, **{"signature": signature}}
+    resp = await wsRequest(json.dumps(block))
+    resp = json.loads(resp)
+
+    if resp["type"] == "confirm":
+        receiveAmount = sendAmount
+        newBalance = block["balance"]
+        print(f"Received MXC: {receiveAmount}")
+        print(f"New Balance: {newBalance}")
+
+    else:
+        print("Failed to receive MXC!")
+        print(resp)
+
+
+async def sendAlert(data):
+    data = json.loads(data)
+    await receive(data["sendAmount"], data["link"])
+
+
+async def websocketPoolLoop():
+    global websocketPool
+    while True:
+        await asyncio.sleep(0.03)
+        try:
+            resp = await asyncio.wait_for(websocket.recv(), 0.5)
+            if prevRequest == "":
+                if json.loads(resp)["type"] == "sendAlert":
+                    asyncio.create_task(sendAlert(resp))
+
+                else:
+                    print("Unknown Alert")
+                    print(resp)
+
+                continue
+
+            else:
+                websocketPool[prevRequest][1] = resp
+                prevRequest = ""
+
+        except:
+            pass
+
+        if len(websocketPool.keys()) > 0:
+            poolKeys = list(websocketPool.keys())
+            if websocketPool[poolKeys[0]][1] == "":
+                await websocket.send(websocketPool[poolKeys[0]][0])
+                print("sent: " + websocketPool[poolKeys[0]][0])
+                prevRequest = poolKeys[0]
+                websocketPool[poolKeys[0]][1] = 0
+
+
+async def wsRequest(request):
+    print("wsRequest: " + request)
+    global websocketPool
+    requestID = random.randint(0, 99999999999999)
+    websocketPool[requestID] = [request, ""]
+    while True:
+        await asyncio.sleep(0.1)
+        if websocketPool[requestID][1] != "" and websocketPool[requestID][1] != 0:
+            resp = websocketPool[requestID][1]
+            websocketPool.pop(requestID)
+            return resp
+
+
+async def ping():
+    resp = await wsRequest('{"type": "ping"}')
+    return resp
+
+
+async def main():
+    global websocket
+    uri = "ws://qwhwdauhdasht.ddns.net:5858"
+    websocket = await websockets.connect(uri)
+
+    asyncio.create_task(websocketPoolLoop())
+
+    await ping()
+
+    resp = await wsRequest(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
+    resp = json.loads(resp)
 
     if resp["type"] != "rejection":
-        balance = int(resp["balance"])
+        balance = float(resp["balance"])
 
     else:
         balance = 0
 
     print(f"Balance: {balance}")
+    req = {"type": "pendingSend", "address": publicKeyStr}
+    resp = await wsRequest(json.dumps(req))
+    resp = json.loads(resp)
+
+    if resp["link"] != "":
+        await receive(resp["sendAmount"], resp["link"])
+
+    req = {"type": "watchForSends", "address": publicKeyStr}
+    await wsRequest(json.dumps(req))
 
     while True:
-        sendAddress = await ainput("Send Address: ")
-        toSend = await ainput("Amount to send: ")
-        toSend = int(toSend)
-
-        doBackgroundCheck = False
-
-        newBalance = balance - toSend
         blockID = str(random.randint(0, 99999999999999999999))
-        blockID = "0"*(20-len(blockID)) + blockID
+        blockID = "0" * (20 - len(blockID)) + blockID
+        action = await ainput("Send or Delegate? (s/d) ")
+        if action == "s":
+            sendAddress = await ainput("Send Address: ")
+            toSend = await ainput("Amount to send: ")
+            toSend = int(toSend)
 
-        await websocket.send(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
-        response = await websocket.recv()
-        previous = json.loads(response)["link"]
+            newBalance = balance - toSend
 
-        data = {"type": "send", "address": f"{publicKeyStr}", "link": f"{sendAddress}", "balance": f"{newBalance}", "id": f"{blockID}", "previous": previous}
+            response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
+            previous = json.loads(response)["link"]
 
-        signature = await genSignature(data, privateKey)
-        data = {**data, **{"signature": f"{signature}"}}
-        await websocket.send(json.dumps(data))
-        resp = await websocket.recv()
-        print(resp)
-        doBackgroundCheck = True
+            response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
+            representative = json.loads(response)["representative"]
 
+            data = {"type": "send", "address": f"{publicKeyStr}", "link": f"{sendAddress}", "balance": f"{newBalance}", "id": f"{blockID}", "previous": previous, "representative": representative}
+
+            signature = await genSignature(data, privateKey)
+            data = {**data, **{"signature": f"{signature}"}}
+            resp = await wsRequest(json.dumps(data))
+            if json.loads(resp)["type"] == "confirm":
+                print("MXC send initiated!")
+
+            else:
+                print("MXC send failed to initiate, please see error below:")
+                print(resp)
+
+        elif action == "d":
+            delegateAddress = await ainput("Delegate Address: ")
+            response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
+            previous = json.loads(response)["link"]
+
+            data = {"type": "change", "address": publicKeyStr, "balance": balance, "representative": delegateAddress, "id": blockID, "previous": previous}
+
+            signature = await genSignature(data, privateKey)
+            data["signature"] = signature
+
+            resp = await wsRequest(json.dumps(data))
+            if json.loads(resp)["type"] == "confirm":
+                print("Delegation change initiated!")
+
+            else:
+                print("MXC delegation change failed to initiate, please see error below:")
+                print(resp)
 
 asyncio.get_event_loop().run_until_complete(main())
