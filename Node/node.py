@@ -8,10 +8,14 @@ import socket
 
 import os
 import random
+import traceback
 
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
+from Crypto.PublicKey import RSA
+from Crypto.Random import get_random_bytes
+from Crypto.Cipher import AES, PKCS1_OAEP
 
 # Configuration Variables
 entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]  # List of known nodes that can be used to "enter" the network.
@@ -61,6 +65,63 @@ ip = -1
 myPort = -1
 
 votingWeights = {}
+
+try:
+    f = open("handshake_key.pem", "rb")
+    handshakeKey = RSA.import_key(f.read())
+    f.close()
+
+except FileNotFoundError:
+    handshakeKey = RSA.generate(2048)
+    toWrite = handshakeKey.export_key()
+    f = open("handshake_key.pem", "wb+")
+    f.write(toWrite)
+    f.close()
+    del toWrite
+
+handshakePublicKey = handshakeKey.publickey()
+handshakePublicKeyStr = handshakePublicKey.export_key()
+handshakeCipher = PKCS1_OAEP.new(handshakeKey)
+
+
+class websocketSecure:
+    def __init__(self, url):
+        self.url = url
+
+    async def initiateConnection(self):
+        self.websocket = await websockets.connect(self.url)
+        await self.websocket.send(handshakePublicKeyStr)
+        handshakeData = await self.websocket.recv()
+        print("Data: " + handshakeData)
+        handshakeData = json.loads(handshakeData)
+
+        sessionKey = bytes.fromhex(handshakeData["sessionKey"])
+        self.sessionKey = handshakeCipher.decrypt(sessionKey)
+
+    @classmethod
+    async def connect(cls, url):
+        self = websocketSecure(url)
+        await asyncio.wait({self.initiateConnection()})
+        return self
+
+    async def recv(self):
+        data = await self.websocket.recv()
+        ciphertext, tag, nonce = data.split("|||")
+        ciphertext, tag, nonce = bytes.fromhex(ciphertext), bytes.fromhex(tag), bytes.fromhex(nonce)
+        cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+        plaintext = plaintext.decode("utf-8")
+
+        return plaintext
+
+    async def send(self, plaintext):
+        cipher = AES.new(self.sessionKey, AES.MODE_EAX)
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+        await self.websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher.nonce.hex())
+
+    async def close(self):
+        await self.websocket.close()
+
 
 async def balance(data: dict) -> str:
     """Returns an account's balance"""
@@ -394,7 +455,7 @@ async def registerMyself(node, doRespond):
     global myPort
     global ip
     print(f"Registering with {node}")
-    websocket = await websockets.connect(node)
+    websocket = await websocketSecure.connect(node)
     await websocket.send(f'{{"type": "registerNode", "port": "{myPort}", "address": "{publicKeyStr}","respond": "{str(doRespond)}"}}')
     resp = await websocket.recv()
     if json.loads(resp)["type"] == "confirm":
@@ -600,7 +661,6 @@ async def verifyLedger():
         blocks = {}
         data = data.splitlines()
         for block in data:
-            print(block)
             block = json.loads(block)
             blocks[block["id"]] = [block, None]
 
@@ -781,10 +841,23 @@ async def watchForSends(data, ws):
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
+
+    recipientKey = await websocket.recv()
+    recipientKey = RSA.import_key(recipientKey)
+    session_key = get_random_bytes(16)
+    cipher_rsa = PKCS1_OAEP.new(recipientKey)
+    enc_session_key = cipher_rsa.encrypt(session_key)
+    await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": enc_session_key.hex()}))
+
     print(f"Client Connected: {websocket.remote_address[0]}")
     while True:
         try:
             data = await websocket.recv()
+            ciphertext, tag, nonce = data.split("|||")
+            ciphertext, tag, nonce = bytes.fromhex(ciphertext), bytes.fromhex(tag), bytes.fromhex(nonce)
+            cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
+            plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
+            data = plaintext.decode("utf-8")
 
         except:
             print("Client Disconnected")
@@ -855,7 +928,9 @@ async def incoming(websocket, path):
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
 
-        await websocket.send(response)
+        cipher_aes = AES.new(session_key, AES.MODE_EAX)
+        ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
+        await websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher_aes.nonce.hex())
 
 
 # Handles incoming ledger requests
@@ -902,7 +977,7 @@ async def fetchLedger(node):
 # Check if node running on given url
 async def testWebsocket(url):
     try:
-        websocket = await asyncio.wait_for(websockets.connect(url), 3)
+        websocket = await asyncio.wait_for(websocketSecure.connect(url), 3)
         await websocket.send('{"type": "ping"}')
         await websocket.recv()
         await websocket.close()
@@ -910,6 +985,7 @@ async def testWebsocket(url):
         return True
 
     except:
+        traceback.print_exc()
         return False
 
 
