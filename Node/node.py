@@ -12,6 +12,9 @@ import random
 from Crypto.Signature import DSS
 from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
+from Crypto.PublicKey import RSA
+from Crypto.Random import get_random_bytes
+from Crypto.Cipher import AES, PKCS1_OAEP
 
 # Configuration Variables
 entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]  # List of known nodes that can be used to "enter" the network.
@@ -61,6 +64,10 @@ ip = -1
 myPort = -1
 
 votingWeights = {}
+
+handshakeKey = None
+handshakePublicKeyStr = None
+handshakeCipher = PKCS1_OAEP.new(handshakeKey)
 
 async def balance(data: dict) -> str:
     """Returns an account's balance"""
@@ -781,10 +788,23 @@ async def watchForSends(data, ws):
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
+
+    recipientKey = await websocket.recv()
+    recipientKey = RSA.import_key(recipientKey)
+    session_key = get_random_bytes(16)
+    cipher_rsa = PKCS1_OAEP.new(recipientKey)
+    enc_session_key = cipher_rsa.encrypt(session_key)
+    cipher_aes = AES.new(session_key, AES.MODE_EAX)
+    await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": enc_session_key.hex(), "nonce": cipher_aes.nonce.hex()}))
+
     print(f"Client Connected: {websocket.remote_address[0]}")
     while True:
         try:
             data = await websocket.recv()
+            ciphertext, tag = data.split("|||")
+            ciphertext, tag = bytes.fromhex(ciphertext), bytes.fromhex(tag)
+            plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
+            data = plaintext.decode("utf-8")
 
         except:
             print("Client Disconnected")
@@ -855,7 +875,8 @@ async def incoming(websocket, path):
         else:
             response = f'{{"type": "rejection", "reason": "unknown request"}}'
 
-        await websocket.send(response)
+        ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
+        await websocket.send(ciphertext.hex() + "|||" + tag.hex())
 
 
 # Handles incoming ledger requests

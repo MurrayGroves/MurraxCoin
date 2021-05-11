@@ -13,6 +13,62 @@ privateFile = input("Private Key Path: ")
 
 websocketPool = {}
 
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
+
+
+try:
+    f = open("handshake_key.pem", "rb")
+    handshakeKey = RSA.import_key(f.read())
+    f.close()
+
+except FileNotFoundError:
+    handshakeKey = RSA.generate(2048)
+    toWrite = handshakeKey.export_key()
+    f = open("handshake_key.pem", "wb+")
+    f.write(toWrite)
+    f.close()
+    del toWrite
+
+handshakePublicKey = handshakeKey.publickey()
+handshakePublicKeyStr = handshakePublicKey.export_key()
+handshakeCipher = PKCS1_OAEP.new(handshakeKey)
+
+
+class websocketSecure:
+    def __init__(self, url):
+        self.url = url
+
+    async def initiateConnection(self):
+        self.websocket = await websockets.connect(self.url)
+        await self.websocket.send(handshakePublicKeyStr)
+        handshakeData = await self.websocket.recv()
+        handshakeData = json.loads(handshakeData)
+
+        sessionKey = bytes.fromhex(handshakeData["sessionKey"])
+        sessionKey = handshakeCipher.decrypt(sessionKey)
+        nonce = bytes.fromhex(handshakeData["nonce"])
+        self.cipher = AES.new(sessionKey, AES.MODE_EAX, nonce)
+
+    @classmethod
+    async def connect(cls, url):
+        self = websocketSecure(url)
+        await self.initiateConnection()
+        return self
+
+    async def recv(self):
+        data = await self.websocket.recv()
+        ciphertext, tag = data.split("|||")
+        ciphertext, tag = bytes.fromhex(ciphertext), bytes.fromhex(tag)
+        plaintext = self.cipher.decrypt_and_verify(ciphertext, tag)
+        plaintext = plaintext.decode("utf-8")
+
+        return plaintext
+
+    async def send(self, plaintext):
+        ciphertext, tag = self.cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+        await self.websocket.send(ciphertext.hex() + "|||" + tag.hex())
+
 
 async def genSignature(data, privateKey):
     data = json.dumps(data)
@@ -161,7 +217,7 @@ async def ping():
 async def main():
     global websocket
     uri = "ws://qwhwdauhdasht.ddns.net:5858"
-    websocket = await websockets.connect(uri)
+    websocket = await websocketSecure.connect(uri)
 
     asyncio.create_task(websocketPoolLoop())
 
