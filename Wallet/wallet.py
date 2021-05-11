@@ -43,31 +43,35 @@ class websocketSecure:
         self.websocket = await websockets.connect(self.url)
         await self.websocket.send(handshakePublicKeyStr)
         handshakeData = await self.websocket.recv()
+        print("Data: " + handshakeData)
         handshakeData = json.loads(handshakeData)
 
         sessionKey = bytes.fromhex(handshakeData["sessionKey"])
-        sessionKey = handshakeCipher.decrypt(sessionKey)
-        nonce = bytes.fromhex(handshakeData["nonce"])
-        self.cipher = AES.new(sessionKey, AES.MODE_EAX, nonce)
+        self.sessionKey = handshakeCipher.decrypt(sessionKey)
 
     @classmethod
     async def connect(cls, url):
         self = websocketSecure(url)
-        await self.initiateConnection()
+        await asyncio.wait({self.initiateConnection()})
         return self
 
     async def recv(self):
         data = await self.websocket.recv()
-        ciphertext, tag = data.split("|||")
-        ciphertext, tag = bytes.fromhex(ciphertext), bytes.fromhex(tag)
-        plaintext = self.cipher.decrypt_and_verify(ciphertext, tag)
+        ciphertext, tag, nonce = data.split("|||")
+        ciphertext, tag, nonce = bytes.fromhex(ciphertext), bytes.fromhex(tag), bytes.fromhex(nonce)
+        cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
         plaintext = plaintext.decode("utf-8")
 
         return plaintext
 
     async def send(self, plaintext):
-        ciphertext, tag = self.cipher.encrypt_and_digest(plaintext.encode("utf-8"))
-        await self.websocket.send(ciphertext.hex() + "|||" + tag.hex())
+        cipher = AES.new(self.sessionKey, AES.MODE_EAX)
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+        await self.websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher.nonce.hex())
+
+    async def close(self):
+        await self.websocket.close()
 
 
 async def genSignature(data, privateKey):
