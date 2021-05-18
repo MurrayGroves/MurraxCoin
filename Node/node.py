@@ -135,12 +135,13 @@ async def balance(data: dict) -> str:
         response = f'{{"type": "rejection", "address": "{address}", "reason": "addressNonExistent"}}'
         return response
 
-    response = f'{{"type": "info", "address": "{address}", "balance": "{block["balance"]}" }}'
+    response = {"type": "info", "address": address, "balance": f"{block['balance']}"}
     return response
 
 
 async def broadcast(data):
     """Broadcast a verified transaction to other nodes"""
+
 
     broadcastID = str(random.randint(0, 99999999999999999999))
     broadcastID = "0"*(20-len(broadcastID)) + broadcastID
@@ -161,7 +162,7 @@ async def broadcast(data):
             print("Error: " + str(e))
             pass
 
-    packet = {"type": "vote", "voteID": broadcastID, "vote": "for", "block": data, "address": publicKeyStr}
+    packet = {"type": "vote", "voteID": broadcastID, "vote": "for", "block": json.dumps(data), "address": publicKeyStr}
     signature = await genSignature(packet, privateKey)
     print(signature)
     print("Broadcast: " + json.dumps(packet))
@@ -174,7 +175,6 @@ async def broadcast(data):
     for node in nodes:
         onlineWeight += nodes[node][2]
 
-    data = json.loads(data)
     votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
         print("Consensus reached: " + str(votePool[broadcastID]))
@@ -241,13 +241,10 @@ async def checkForPendingSend(data):
                     return resp
 
     response = {"type": "pendingSend", "link": "", "sendAmount": ""}
-    return json.dumps(response)
+    return response
 
 
 async def change(data):
-    if type(data) == str:
-        data = json.loads(data)
-
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
@@ -267,7 +264,7 @@ async def change(data):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "link"}}'
         return toRespond
 
-    toRespond = f'{{"type": "confirm", "action":"delegate","address": "{address}", "id": "{blockID}"}}'
+    toRespond = {"type": "confirm", "action":"delegate","address": address, "id": blockID}
     return toRespond
 
 
@@ -279,7 +276,7 @@ async def fetchNodes():
         nodeAddresses = nodeAddresses + "|" + node
 
     response = {"type": "confirm", "action": "fetchNodes", "nodes": nodeAddresses}
-    return json.dumps(response)
+    return response
 
 
 async def genSignature(data, privateKey):
@@ -314,6 +311,14 @@ async def getBlock(address, blockID):
     print("not found")
 
 
+async def getPrevious(data):
+    head = await getHead(data["address"])
+    address = data["address"]
+    previous = head["id"]
+    response = {"type": "previous", "address": address, "link": previous}
+    return response
+
+
 async def getRepresentative(address):  # Get address of an account's representative
     head = await getHead(address)
     try:
@@ -322,7 +327,8 @@ async def getRepresentative(address):  # Get address of an account's representat
     except KeyError:
         representative = address
 
-    return json.dumps({"type": "info", "address": address, "representative": representative})
+    return {"type": "info", "address": address, "representative": representative}
+
 
 # Get the head block of an account (the most recent block)
 async def getHead(address):
@@ -361,18 +367,34 @@ async def getHead(address):
     return blocks[-1]
 
 
+async def initiate(data):
+    if data["type"] == "change":
+        response = await change(data)
+
+    elif data["type"] == "open":
+        response = await openAccount(data)
+
+    elif data["type"] == "receive":
+        response = await receive(data)
+
+    else:
+        response = await send(data)
+
+    if response["type"] == "confirm":
+        await broadcast(data)
+
+    return response
+
+
 # Process an open transaction
 async def openAccount(data):
-    if type(data) == str:
-        data = json.loads(data)
-
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
+        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
         return toRespond
 
     sendingAddress, sendingBlock = data["link"].split("/")
@@ -381,36 +403,37 @@ async def openAccount(data):
     # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
+        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}
         return toRespond
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
     sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
     if float(data["balance"]) != float(sendAmount):
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
-        return toRespond
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}
 
-    if data["previous"] != "0"*20:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
-        return toRespond
+    elif data["previous"] != "0"*20:
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
 
-    toRespond = f'{{"type": "confirm", "action": "open","address": "{address}", "id": "{blockID}"}}'
-    return toRespond
+    else:
+        response = {"type": "confirm", "action": "open","address": "{address}", "id": "{blockID}"}
+
+    return response
+
+
+async def ping():
+    return {"type": "confirm", "action": "ping"}
 
 
 # Process a receive transaction
 async def receive(data):
-    if type(data) == str:
-        data = json.loads(data)
-
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
+        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
         return toRespond
 
     sendingAddress, sendingBlock = data["link"].split("/")
@@ -419,7 +442,7 @@ async def receive(data):
     # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}}'
+        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}
         return toRespond
 
     f = await aiofiles.open(f"{ledgerDir}{address}")
@@ -432,22 +455,22 @@ async def receive(data):
 
         if json.loads(block)["link"] == data["link"]:
             response = {"type": "rejection", "address": address, "id": blockID, "reason": "doubleReceive"}
-            return json.dumps(response)
+            return response
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
     sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
     head = await getHead(address)
     if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}}'
-        return toRespond
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}
 
-    if data["previous"] != head["id"]:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
-        return toRespond
+    elif data["previous"] != head["id"]:
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
 
-    toRespond = f'{{"type": "confirm", "action":"receive","address": "{address}", "id": "{blockID}"}}'
-    return toRespond
+    else:
+        response = {"type": "confirm", "action":"receive","address": "{address}", "id": "{blockID}"}
+
+    return response
 
 
 # Register myself with specified node
@@ -484,30 +507,44 @@ async def registerMyself(node, doRespond):
     print("Done registering")
 
 
+async def registerNode(data, websocket):
+    response = {"type": "confirm", "action": "registerNode"}
+    try:
+        weight = float(votingWeights[data["address"]])
+
+    except KeyError:  # No one has delegated the node's address
+        weight = 0
+
+    nodes[f"ws://{websocket.remote_address[0]}:{data['port']}"] = [None, data["address"], weight]
+    if data["respond"] == "True":
+        await registerMyself(f"ws://{websocket.remote_address[0]}:{data['port']}", doRespond=False)
+
+    return response
+
+
 # Processes a send transaction
 async def send(data):
-    if type(data) == str:
-        data = json.loads(data)
-
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
-        return toRespond
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
 
     head = await getHead(address)
     if float(head["balance"]) < float(data["balance"]):
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
-        return toRespond
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}
 
-    if head["id"] != data["previous"]:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}}'
-        return toRespond
+    elif head["id"] != data["previous"]:
+        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
 
-    toRespond = f'{{"type": "confirm", "action":"send","address": "{address}", "id": "{blockID}"}}'
+    else:
+        response = {"type": "confirm", "action": "send", "address": "{address}", "id": "{blockID}"}
+
+    if response["type"] != "confirm":
+        return response
+
     if data["link"] in sendSubscriptions:
         sendAlert = {"type": "sendAlert", "address": data["link"],
                      "sendAmount": str(float(head["balance"]) - float(data["balance"])),
@@ -521,7 +558,7 @@ async def send(data):
             except websockets.exceptions.ConnectionClosedError:
                 pass
 
-    return toRespond
+    return response
 
 
 async def updateVotingWeights():  # Updates the voting weights for all accounts which have been delegated to
@@ -688,8 +725,6 @@ async def vote(data):
         2 - Adds to local vote pool, even if invalid.
         3 - Transmit my vote to all nodes I am in contact with."""
 
-    data = json.loads(data)
-
     valid = await verifySignature(data["signature"], data["address"], data)
     if not valid:
         return json.dumps({"type": "rejection", "action": "vote", "reason": "signature"})
@@ -708,7 +743,7 @@ async def vote(data):
     if data["voteID"] in votePool:  # Vote is already in pool so just update
         for ballot in votePool[data["voteID"]][3]:
             if data["address"] == ballot[0]["address"]:  # Address has already voted
-                return json.dumps({"type": "rejection", "action": "vote", "reason": "double vote"})
+                {"type": "rejection", "action": "vote", "reason": "double vote"}
 
         votePool[data["voteID"]][1] += weight
         votePool[data["voteID"]][3].append([data, weight])
@@ -719,11 +754,12 @@ async def vote(data):
             await f.close()
             votePool[data["voteID"]][4] = True
 
-        return json.dumps({"type": "confirm", "action": "vote"})
+        return {"type": "confirm", "action": "vote"}
 
     onlineWeight = 0
     for node in nodes:
         onlineWeight += nodes[node][2]
+
     votePool[data["voteID"]] = [onlineWeight * consensusPercent, weight, json.loads(data["block"]), [[data, weight]], False]
     if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
         print("Consensus reached: " + str(votePool[data["voteID"]]))
@@ -734,7 +770,7 @@ async def vote(data):
 
     for ballot in votePool[data["voteID"]][3]:
         if publicKeyStr == ballot[0]["address"]:  # Our address has already voted so do not cast a vote
-            return json.dumps({"type": "confirm", "action": "vote"})
+            return {"type": "confirm", "action": "vote"}
 
     blockType = json.loads(data["block"])["type"]
     if blockType == "send":
@@ -751,7 +787,7 @@ async def vote(data):
 
     else:
         print(f"Incoming vote block is of unknown type: {data['block']}")
-        resp = '{"type": "rejection"}'
+        resp = {"type": "rejection"}
 
     if json.loads(resp)["type"] == "confirm":
         valid = True
@@ -793,7 +829,6 @@ async def vote(data):
                 validNodesStr = validNodesStr + "|" + node
                 validNodes.append(node)
 
-
         except Exception as e:
             print("Error: " + str(e))
             pass
@@ -815,7 +850,7 @@ async def vote(data):
             print("Exception while receiving vote confirmation")
             print(e)
 
-    return json.dumps({"type": "confirm", "action": "vote"})
+    return {"type": "confirm", "action": "vote"}
 
 
 async def watchForSends(data, ws):
@@ -835,7 +870,12 @@ async def watchForSends(data, ws):
     sendSubscriptions[address] = prevSubs
 
     resp = {"type": "confirm", "action": "watchForSends", "address": address}
-    return json.dumps(resp)
+    return resp
+
+
+requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative,  # Relates to accounts
+                    "registerNode": registerNode, "fetchNodes": fetchNodes, "ping": ping, "vote": vote,  # Relates to nodes
+                    "receive": initiate, "open": initiate, "send": initiate, "change": initiate}  # Relates to starting transactions
 
 
 # Handles incoming websocket connections
@@ -865,69 +905,14 @@ async def incoming(websocket, path):
 
         data = json.loads(data)
         print(data)
-        if data["type"] == "ping":
-            response = '{"type": "confirm", "action": "ping"}'
 
-        elif data["type"] == "balance":
-            response = await balance(data)
-
-        elif data["type"] == "send":
-            response = await send(data)
-            if json.loads(response)["type"] == "confirm":
-                await broadcast(json.dumps(data))
-
-        elif data["type"] == "pendingSend":
-            response = await checkForPendingSend(data)
-
-        elif data["type"] == "receive":
-            response = await receive(data)
-            if json.loads(response)["type"] == "confirm":
-                await broadcast(json.dumps(data))
-
-        elif data["type"] == "open":
-            response = await openAccount(data)
-            if json.loads(response)["type"] == "confirm":
-                await broadcast(json.dumps(data))
-
-        elif data["type"] == "getPrevious":
-            head = await getHead(data["address"])
-            address = data["address"]
-            previous = head["id"]
-            response = f'{{"type": "previous", "address": "{address}", "link": "{previous}"}}'
-
-        elif data["type"] == "registerNode":
-            response = json.dumps({"type": "confirm", "action": "registerNode"})
-            try:
-                weight = float(votingWeights[data["address"]])
-
-            except KeyError:  # No one has delegated the node's address
-                weight = 0
-
-            nodes[f"ws://{websocket.remote_address[0]}:{data['port']}"] = [None, data["address"], weight]
-            if data["respond"] == "True":
-                await registerMyself(f"ws://{websocket.remote_address[0]}:{data['port']}", doRespond=False)
-
-        elif data["type"] == "fetchNodes":
-            response = await fetchNodes()
-
-        elif data["type"] == "watchForSends":
-            response = await watchForSends(data, websocket)
-
-        elif data["type"] == "vote":
-            print("VOTING HAS BEGUN")
-            response = await vote(json.dumps(data))
-
-        elif data["type"] == "change":
-            response = await change(data)
-            if json.loads(response)["type"] == "confirm":
-                await broadcast(json.dumps(data))
-
-        elif data["type"] == "getRepresentative":
-            response = await getRepresentative(data["address"])
+        if data["type"] in requestFunctions:
+            response = await requestFunctions[data["type"]](data=data, ws=websocket)
 
         else:
-            response = f'{{"type": "rejection", "reason": "unknown request"}}'
+            response = {"type": "rejection", "reason": "unknown request"}
 
+        response = json.dumps(response)
         cipher_aes = AES.new(session_key, AES.MODE_EAX)
         ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
         await websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher_aes.nonce.hex())
