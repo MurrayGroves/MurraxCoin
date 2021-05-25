@@ -1,2 +1,14 @@
  # MurraxCoin
-A block-lattice based cryptocurrency made in Python as a hobby project. MurraxCoin is inspired by [Nano](https://nano.org/). It is feeless and uses block-lattice technology, where each account has its own blockchain, in order to be fast. In reality it probably isn't since it's made by me and in Python. Transactions are settled using Open Representative Voting (ORV), where each account votes on transactions. Voting power is decided by the account's balance. Since it is infeasible for all accounts to run a node, accounts can delegate their MurraxCoin to accounts which run nodes. No MurraxCoin is spent or locked away in this process.
+
+MurraxCoin is purely a learning project, and as such, compromises were made to make development easier.  
+The largest of these is that the official node is made in Python. This makes development much easier,
+but inherits all the performance downsides of an interpreted language.
+
+MurraxCoin is heavily inspired by [Nano](https://nano.org) and follows the same basic design principles:
+- Fast
+  - Uses a block-lattice design, meaning each account has its own blockchain. This means transactions can happen asynchronously.
+  - Each transaction is its own block, meaning transactions do not have to wait for other transactions to fill a block.
+- Feeless
+  - Nodes earn no transaction fees, and instead run nodes in order to secure the network, and furthermore, their holdings.
+- Environmentally friendly
+  - Uses [Open Representative Voting (ORV)](https://docs.nano.org/glossary/#open-representative-voting-orv) instead of proof-of-work, which means no computational power is wasted mining.
