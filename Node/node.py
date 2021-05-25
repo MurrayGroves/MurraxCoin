@@ -18,7 +18,7 @@ from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES, PKCS1_OAEP
 
 # Configuration Variables
-entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969"]  # List of known nodes that can be used to "enter" the network.
+entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969", "ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
 ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
 publicFile = "../public_key.pem"  # Path of the node's public key
 privateFile = "../private_key.pem"  # Path of the node's private key
@@ -102,7 +102,15 @@ class websocketSecure:
     async def connect(cls, url):
         self = websocketSecure(url)
         await asyncio.wait({self.initiateConnection()})
-        return self
+        for i in range(200):
+            try:
+                self.sessionKey
+                return self
+
+            except:
+                await asyncio.sleep(0.1)
+
+        raise TimeoutError
 
     async def recv(self):
         data = await self.websocket.recv()
@@ -178,9 +186,15 @@ async def broadcast(data):
     votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
         print("Consensus reached: " + str(votePool[broadcastID]))
-        f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
-        await f.write("\n" + json.dumps(data))
-        await f.close()
+        if data["type"] != "open":
+            f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
+            await f.write("\n" + json.dumps(data))
+            await f.close()
+        else:
+            f = await aiofiles.open(f"{ledgerDir}{data['address']}", "w+")
+            await f.write(json.dumps(data))
+            await f.close()
+
         votePool[broadcastID][4] = True
 
     for node in validNodes:
@@ -749,9 +763,14 @@ async def vote(data):
         votePool[data["voteID"]][3].append([data, weight])
         if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
             print("Consensus reached: " + str(votePool[data["voteID"]]))
-            f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
-            await f.write("\n" + data["block"])
-            await f.close()
+            if data["block"]["type"] != "open":
+                f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
+                await f.write("\n" + data["block"])
+                await f.close()
+            else:
+                f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "w+")
+                await f.write(data["block"])
+                await f.close()
             votePool[data["voteID"]][4] = True
 
         return {"type": "confirm", "action": "vote"}
