@@ -53,7 +53,16 @@ class websocketSecure:
     async def connect(cls, url):
         self = websocketSecure(url)
         await asyncio.wait({self.initiateConnection()})
-        return self
+        for i in range(200):
+            try:
+                self.sessionKey
+                return self
+
+            except:
+                await asyncio.sleep(0.1)
+
+        raise TimeoutError
+
 
     async def recv(self):
         data = await self.websocket.recv()
@@ -220,7 +229,7 @@ async def ping():
 
 async def main():
     global websocket
-    uri = "ws://qwhwdauhdasht.ddns.net:5858"
+    uri = "ws://murraxcoin.murraygrov.es:6969"
     websocket = await websocketSecure.connect(uri)
 
     asyncio.create_task(websocketPoolLoop())
