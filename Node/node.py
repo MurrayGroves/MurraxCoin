@@ -131,7 +131,7 @@ class websocketSecure:
         await self.websocket.close()
 
 
-async def balance(data: dict) -> str:
+async def balance(data: dict, **kwargs) -> str:
     """Returns an account's balance"""
 
     address = data["address"]
@@ -147,7 +147,7 @@ async def balance(data: dict) -> str:
     return response
 
 
-async def broadcast(data):
+async def broadcast(data, **kwargs):
     """Broadcast a verified transaction to other nodes"""
 
 
@@ -216,7 +216,7 @@ async def broadcast(data):
 
 
 # Return any send transactions that have not been received by an account
-async def checkForPendingSend(data):
+async def checkForPendingSend(data, **kwargs):
     address = data["address"]
 
     received = []
@@ -258,7 +258,7 @@ async def checkForPendingSend(data):
     return response
 
 
-async def change(data):
+async def change(data, **kwargs):
     signature = data["signature"]
     address = data["address"]
     blockID = data["id"]
@@ -283,7 +283,7 @@ async def change(data):
 
 
 # Return a list of available nodes
-async def fetchNodes():
+async def fetchNodes(**kwargs):
     global nodes
     nodeAddresses = ""
     for node in nodes:
@@ -325,7 +325,7 @@ async def getBlock(address, blockID):
     print("not found")
 
 
-async def getPrevious(data):
+async def getPrevious(data, **kwargs):
     head = await getHead(data["address"])
     address = data["address"]
     previous = head["id"]
@@ -333,7 +333,7 @@ async def getPrevious(data):
     return response
 
 
-async def getRepresentative(address):  # Get address of an account's representative
+async def getRepresentative(address, **kwargs):  # Get address of an account's representative
     head = await getHead(address)
     try:
         representative = head["representative"]
@@ -345,7 +345,7 @@ async def getRepresentative(address):  # Get address of an account's representat
 
 
 # Get the head block of an account (the most recent block)
-async def getHead(address):
+async def getHead(address, **kwargs):
     f = await aiofiles.open(f"{ledgerDir}{address}")
     fileStr = await f.read()
     await f.close()
@@ -381,7 +381,7 @@ async def getHead(address):
     return blocks[-1]
 
 
-async def initiate(data):
+async def initiate(data, **kwargs):
     if data["type"] == "change":
         response = await change(data)
 
@@ -435,7 +435,7 @@ async def openAccount(data):
     return response
 
 
-async def ping():
+async def ping(**kwargs):
     return {"type": "confirm", "action": "ping"}
 
 
@@ -733,7 +733,7 @@ async def verifyLedger():
     print("Ledger Verified!")
 
 
-async def vote(data):
+async def vote(data, **kwargs):
     """ Called when receiving a vote.
         1 - Validates block.
         2 - Adds to local vote pool, even if invalid.
