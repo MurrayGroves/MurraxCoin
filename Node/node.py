@@ -140,7 +140,7 @@ async def balance(data: dict, **kwargs) -> str:
         block = await getHead(address)
 
     except FileNotFoundError:
-        response = f'{{"type": "rejection", "address": "{address}", "reason": "addressNonExistent"}}'
+        response = {"type": "rejection", "address": "{address}", "reason": "addressNonExistent"}
         return response
 
     response = {"type": "info", "address": address, "balance": f"{block['balance']}"}
@@ -177,7 +177,7 @@ async def broadcast(data, **kwargs):
     packet["signature"] = signature
 
     weight = await balance({"address": publicKeyStr})
-    weight = float(json.loads(weight)["balance"])
+    weight = float(weight["balance"])
 
     onlineWeight = 0
     for node in nodes:
@@ -251,7 +251,6 @@ async def checkForPendingSend(data, **kwargs):
                     amount = float(amount["balance"]) - float(block["balance"])
 
                     resp = {"type": "pendingSend", "link": f"{block['address']}/{block['id']}", "sendAmount": amount}
-                    resp = json.dumps(resp)
                     return resp
 
     response = {"type": "pendingSend", "link": "", "sendAmount": ""}
@@ -333,7 +332,8 @@ async def getPrevious(data, **kwargs):
     return response
 
 
-async def getRepresentative(address, **kwargs):  # Get address of an account's representative
+async def getRepresentative(data, **kwargs):  # Get address of an account's representative
+    address = data["address"]
     head = await getHead(address)
     try:
         representative = head["representative"]
@@ -989,7 +989,6 @@ async def testWebsocket(url):
         return True
 
     except:
-        traceback.print_exc()
         return False
 
 
