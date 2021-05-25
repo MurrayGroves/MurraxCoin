@@ -334,11 +334,11 @@ async def getPrevious(data, **kwargs):
 
 async def getRepresentative(data, **kwargs):  # Get address of an account's representative
     address = data["address"]
-    head = await getHead(address)
     try:
+        head = await getHead(address)
         representative = head["representative"]
 
-    except KeyError:
+    except:
         representative = address
 
     return {"type": "info", "address": address, "representative": representative}
