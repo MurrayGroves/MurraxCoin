@@ -22,6 +22,6 @@ pyinstaller-hooks-contrib==2021.1
 pywin32-ctypes==0.2.0
 requests==2.25.1
 typing-extensions==3.7.4.3
-urllib3==1.26.4
+urllib3==1.26.5
 websockets==8.1
 yarl==1.6.3
