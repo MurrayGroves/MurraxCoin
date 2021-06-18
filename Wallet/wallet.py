@@ -292,8 +292,10 @@ async def main():
             response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
             previous = json.loads(response)["link"]
 
-            data = {"type": "change", "address": publicKeyStr, "balance": balance, "representative": delegateAddress, "id": blockID, "previous": previous}
-
+            data = {"type": "change", "address": publicKeyStr, "balance": balance, "representative": delegateAddress, "previous": previous}
+            hasher = BLAKE2b.new(digest_bits=512)
+            blockID = hasher.update(json.dumps(data).encode("utf-8")).hexdigest()
+            data["id"] = blockID
             signature = await genSignature(data, privateKey)
             data["signature"] = signature
 

@@ -284,7 +284,7 @@ async def change(data, **kwargs):
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
         return toRespond
 
     preID = data.copy()
@@ -294,17 +294,17 @@ async def change(data, **kwargs):
     hasher = BLAKE2b.new(digest_bits=512)
     realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
     if blockID != realID:
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "id"}}'
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
         return toRespond
 
     previousBlock = await getBlock(address, data["previous"])
     # Check that balance has not changed
     if float(data["balance"]) != float(previousBlock["balance"]):
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}}'
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
         return toRespond
 
     if data["representative"] not in os.listdir(ledgerDir):  # If account to be delegated to does not exist
-        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "link"}}'
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "link"}
         return toRespond
 
     toRespond = {"type": "confirm", "action": "delegate", "address": address, "id": blockID}
@@ -455,6 +455,16 @@ async def openAccount(data):
         toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
         return toRespond
 
+    preID = data.copy()
+    preID.pop("signature")
+    preID.pop("id")
+
+    hasher = BLAKE2b.new(digest_bits=512)
+    realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    if blockID != realID:
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
+        return toRespond
+
     sendingAddress, sendingBlock = data["link"].split("/")
     sendingBlock = await getBlock(sendingAddress, sendingBlock)
 
@@ -492,6 +502,16 @@ async def receive(data):
     valid = await verifySignature(signature, address, data)
     if not valid:
         toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
+        return toRespond
+
+    preID = data.copy()
+    preID.pop("signature")
+    preID.pop("id")
+
+    hasher = BLAKE2b.new(digest_bits=512)
+    realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    if blockID != realID:
+        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "id"}
         return toRespond
 
     sendingAddress, sendingBlock = data["link"].split("/")
@@ -589,6 +609,15 @@ async def send(data):
     valid = await verifySignature(signature, address, data)
     if not valid:
         response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
+
+    preID = data.copy()
+    preID.pop("signature")
+    preID.pop("id")
+
+    hasher = BLAKE2b.new(digest_bits=512)
+    realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    if blockID != realID:
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
 
     head = await getHead(address)
     if float(head["balance"]) < float(data["balance"]):
