@@ -1,14 +1,21 @@
 import asyncio
+
 import websockets
 import random
 import json
 from aioconsole import ainput
+import os
 
 from Crypto.PublicKey import ECC
 from Crypto.Hash import SHA256
+from Crypto.Hash import BLAKE2b
 from Crypto.Signature import DSS
 
-publicFile = input("Public Key Path: ")
+from nacl.signing import SigningKey
+
+import base64
+import zlib
+
 privateFile = input("Private Key Path: ")
 
 websocketPool = {}
@@ -84,48 +91,33 @@ class websocketSecure:
 
 
 async def genSignature(data, privateKey):
-    data = json.dumps(data)
-    signer = DSS.new(privateKey, "deterministic-rfc6979")
-    signatureHash = SHA256.new()
-    signatureHash.update(data.encode("utf-8"))
-    signature = signer.sign(signatureHash)
+    data = json.dumps(data).encode()
+    signature = privateKey.sign(data).signature
     signature = hex(int.from_bytes(signature, "little"))
 
     return signature
 
-
 try:
-    f = open(privateFile, "rt")
-    privateKey = ECC.import_key(f.read())
+    f = open(privateFile, "rb")
+    privateKey = SigningKey(f.read())
     f.close()
 
 except:
-    privateKey = ECC.generate(curve="P-256")
-    f = open(privateFile, "wt")
-    f.write(privateKey.export_key(format="PEM"))
+    seed = os.urandom(32)
+    privateKey = SigningKey(seed)
+    f = open(privateFile, "wb+")
+    f.write(seed)
     f.close()
 
-try:
-    f = open(publicFile, "rt")
-    publicKey = ECC.import_key(f.read())
-    f.close()
+publicKey = privateKey.verify_key
 
-except:
-    publicKey = privateKey.public_key()
-    f = open(publicFile, "wt")
-    f.write(publicKey.export_key(format="PEM"))
-    f.close()
-
-print(publicKey.export_key(format="PEM"))
-
-publicKeyStr = publicKey.export_key(format="PEM", compress=True)
-print("\n")
-print(publicKeyStr)
-
-publicKeyStr = publicKeyStr.replace("-----BEGIN PUBLIC KEY-----\n", "")
-publicKeyStr = publicKeyStr.replace("\n-----END PUBLIC KEY-----", "")
-publicKeyStr = publicKeyStr.replace("\n", " ")
-print(publicKeyStr)
+addressChecksum = zlib.adler32(publicKey.encode()).to_bytes(4, byteorder="big")
+addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
+address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
+publicKeyStr = f"mxc_{address}{addressChecksum}"
+print(f"Your address: {publicKeyStr}")
+print(publicKeyStr[4:56])
+print(publicKeyStr[56:])
 
 doBackgroundCheck = True
 websocket = None
@@ -151,11 +143,12 @@ async def receive(sendAmount, block):
     response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
     representative = json.loads(response)["representative"]
 
-    blockID = str(random.randint(0, 99999999999999999999))
-    blockID = "0" * (20 - len(blockID)) + blockID
-    block = {"type": f"{blockType}", "id": blockID, "previous": f"{previous}", "address": f"{publicKeyStr}",
+    block = {"type": f"{blockType}", "previous": f"{previous}", "address": f"{publicKeyStr}",
              "link": f"{block}", "balance": balance + float(sendAmount), "representative": representative}
 
+    hasher = BLAKE2b.new(digest_bits=512)
+    blockID = hasher.update(json.dumps(block).encode("utf-8")).hexdigest()
+    block["id"] = blockID
     signature = await genSignature(block, privateKey)
     block = {**block, **{"signature": signature}}
     resp = await wsRequest(json.dumps(block))
@@ -229,7 +222,7 @@ async def ping():
 
 async def main():
     global websocket
-    uri = "ws://murraxcoin.murraygrov.es:6969"
+    uri = "ws://localhost:6969"
     websocket = await websocketSecure.connect(uri)
 
     asyncio.create_task(websocketPoolLoop())
@@ -264,6 +257,15 @@ async def main():
             sendAddress = await ainput("Send Address: ")
             toSend = await ainput("Amount to send: ")
             toSend = int(toSend)
+
+            resp = await wsRequest(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
+            resp = json.loads(resp)
+
+            if resp["type"] != "rejection":
+                balance = float(resp["balance"])
+
+            else:
+                balance = 0
 
             newBalance = balance - toSend
 

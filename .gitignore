@@ -128,10 +128,12 @@ dmypy.json
 
 *.pem
 
-Node/Accounts/
+Node/AccountsOld/
 
 Node/Accounts2/
 
 Node/encryptionCLient.py
 
 Node/encryption.py
+
+Node/Accounts/

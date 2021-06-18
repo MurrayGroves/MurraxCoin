@@ -1,44 +1,61 @@
-import asyncio
+# Database
 import json
 import aiofiles
 
+# Networking
 import websockets
 import aiohttp
 import socket
 
+# Misc
 import os
+import asyncio
 import random
 import traceback
 
+# Signing
 from Crypto.Signature import DSS
-from Crypto.Hash import SHA256
 from Crypto.PublicKey import ECC
+from nacl.signing import SigningKey
+from nacl.signing import VerifyKey
+from nacl.exceptions import BadSignatureError
+# Block hashes/address generation
+from Crypto.Hash import SHA256
+from Crypto.Hash import BLAKE2b
+#  Encrypted communication
 from Crypto.PublicKey import RSA
 from Crypto.Random import get_random_bytes
 from Crypto.Cipher import AES, PKCS1_OAEP
+# Address generation
+import base64
+import zlib
 
 # Configuration Variables
 entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969", "ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
 ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
-publicFile = "../public_key.pem"  # Path of the node's public key
-privateFile = "../private_key.pem"  # Path of the node's private key
+#publicFile = "../public_key.pem"  # Path of the node's public key
+privateFile = "../genesis.pem"  # Path of the node's private key
 consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
-# Import node's private key
-f = open(privateFile, "rt")
-privateKey = ECC.import_key(f.read())
-f.close()
 
-# Import node's public key
-f = open(publicFile, "rt")
-publicKey = ECC.import_key(f.read())
-f.close()
+try:
+    f = open(privateFile, "rb")
+    privateKey = SigningKey(f.read())
+    f.close()
 
-# Get a nicer representation of the public key
-publicKeyStr = publicKey.export_key(format="PEM", compress=True)
-publicKeyStr = publicKeyStr.replace("-----BEGIN PUBLIC KEY-----\n", "")
-publicKeyStr = publicKeyStr.replace("\n-----END PUBLIC KEY-----", "")
-publicKeyStr = publicKeyStr.replace("\n", " ")
+except:
+    seed = os.urandom(32)
+    privateKey = SigningKey(seed)
+    f = open(privateFile, "wb+")
+    f.write(seed)
+    f.close()
+
+publicKey = privateKey.verify_key
+
+addressChecksum = zlib.adler32(publicKey.encode()).to_bytes(4, byteorder="big")
+addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
+address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
+publicKeyStr = f"mxc_{address}{addressChecksum}"
 
 # Create the ledger directory
 os.makedirs(ledgerDir, exist_ok=True)
@@ -89,7 +106,10 @@ class websocketSecure:
         self.url = url
 
     async def initiateConnection(self):
-        self.websocket = await websockets.connect(self.url)
+        try:
+            self.websocket = await websockets.connect(self.url)
+        except OSError:
+            raise TimeoutError
         await self.websocket.send(handshakePublicKeyStr)
         handshakeData = await self.websocket.recv()
         print("Data: " + handshakeData)
@@ -140,7 +160,7 @@ async def balance(data: dict, **kwargs) -> str:
         block = await getHead(address)
 
     except FileNotFoundError:
-        response = {"type": "rejection", "address": "{address}", "reason": "addressNonExistent"}
+        response = {"type": "rejection", "address": f"{address}", "reason": "addressNonExistent"}
         return response
 
     response = {"type": "info", "address": address, "balance": f"{block['balance']}"}
@@ -149,7 +169,6 @@ async def balance(data: dict, **kwargs) -> str:
 
 async def broadcast(data, **kwargs):
     """Broadcast a verified transaction to other nodes"""
-
 
     broadcastID = str(random.randint(0, 99999999999999999999))
     broadcastID = "0"*(20-len(broadcastID)) + broadcastID
@@ -179,7 +198,7 @@ async def broadcast(data, **kwargs):
     weight = await balance({"address": publicKeyStr})
     weight = float(weight["balance"])
 
-    onlineWeight = 0
+    onlineWeight = weight
     for node in nodes:
         onlineWeight += nodes[node][2]
 
@@ -191,6 +210,7 @@ async def broadcast(data, **kwargs):
             await f.write("\n" + json.dumps(data))
             await f.close()
         else:
+
             f = await aiofiles.open(f"{ledgerDir}{data['address']}", "w+")
             await f.write(json.dumps(data))
             await f.close()
@@ -267,6 +287,16 @@ async def change(data, **kwargs):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}}'
         return toRespond
 
+    preID = data.copy()
+    preID.pop("signature")
+    preID.pop("id")
+
+    hasher = BLAKE2b.new(digest_bits=512)
+    realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    if blockID != realID:
+        toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "id"}}'
+        return toRespond
+
     previousBlock = await getBlock(address, data["previous"])
     # Check that balance has not changed
     if float(data["balance"]) != float(previousBlock["balance"]):
@@ -277,7 +307,7 @@ async def change(data, **kwargs):
         toRespond = f'{{"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "link"}}'
         return toRespond
 
-    toRespond = {"type": "confirm", "action":"delegate","address": address, "id": blockID}
+    toRespond = {"type": "confirm", "action": "delegate", "address": address, "id": blockID}
     return toRespond
 
 
@@ -292,14 +322,27 @@ async def fetchNodes(**kwargs):
     return response
 
 
-async def genSignature(data, privateKey):
-    """ Sign data with private key"""
+async def getAddress(data, publicKey):
+    """ Get a public key's readable address
+    Addresses are SHA256 hashes of public keys, which are then encoded in base32, with an adler32 checksum at the end.
+    E.g. mxc_ojapkckckyg7j7mimnojepct4kfbxxxgl5ktvtsxgvkb3zjngk2q6weq5la """
 
-    data = json.dumps(data)
-    signer = DSS.new(privateKey, "deterministic-rfc6979")
-    signatureHash = SHA256.new()
-    signatureHash.update(data.encode("utf-8"))
-    signature = signer.sign(signatureHash)
+    publicKey = publicKey.split(" ")
+    publicKey = "-----BEGIN PUBLIC KEY-----\n" + publicKey[0] + "\n" + publicKey[1] + "\n-----END PUBLIC KEY-----"
+    publicKey = ECC.import_key(publicKey)
+
+    publicKeyBin = publicKey.export_key(format="DER", compress=True)
+    publicKeyHash = SHA256.new(publicKeyBin).digest()
+    addressChecksum = zlib.adler32(publicKeyHash).to_bytes(4, byteorder="big")
+    addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
+    address = base64.b32encode(publicKeyHash).decode("utf-8").replace("=", "").lower()
+    address = f"mxc_{address}{addressChecksum}"
+    return address
+
+
+async def genSignature(data, privateKey):
+    data = json.dumps(data).encode()
+    signature = privateKey.sign(data).signature
     signature = hex(int.from_bytes(signature, "little"))
 
     return signature
@@ -314,8 +357,8 @@ async def getBlock(address, blockID):
 
     blocks = []
     for block in fileStr:
-        print(block)
-        blocks.append(json.loads(block))
+        if not block.startswith("address: "):
+            blocks.append(json.loads(block))
 
     for block in blocks:
         if block["id"] == blockID:
@@ -353,7 +396,8 @@ async def getHead(address, **kwargs):
 
     blocks = []
     for block in fileStr:
-        blocks.append(json.loads(block))
+        if not block.startswith("address: "):
+            blocks.append(json.loads(block))
 
     if len(blocks) == 1:
         return blocks[0]
@@ -408,7 +452,7 @@ async def openAccount(data):
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
         return toRespond
 
     sendingAddress, sendingBlock = data["link"].split("/")
@@ -417,20 +461,20 @@ async def openAccount(data):
     # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
-        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "sendSignature"}
         return toRespond
 
     previousBlock = await getBlock(sendingAddress, sendingBlock["previous"])
     sendAmount = float(previousBlock["balance"]) - float(sendingBlock["balance"])
 
     if float(data["balance"]) != float(sendAmount):
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidBalance"}
 
     elif data["previous"] != "0"*20:
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidPrevious"}
 
     else:
-        response = {"type": "confirm", "action": "open","address": "{address}", "id": "{blockID}"}
+        response = {"type": "confirm", "action": "open", "address": f"{address}", "id": f"{blockID}"}
 
     return response
 
@@ -447,7 +491,7 @@ async def receive(data):
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
         return toRespond
 
     sendingAddress, sendingBlock = data["link"].split("/")
@@ -456,7 +500,7 @@ async def receive(data):
     # Check that send block is valid
     valid = await verifySignature(sendingBlock["signature"], sendingAddress, sendingBlock)
     if not valid:
-        toRespond = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "sendSignature"}
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "sendSignature"}
         return toRespond
 
     f = await aiofiles.open(f"{ledgerDir}{address}")
@@ -476,13 +520,13 @@ async def receive(data):
 
     head = await getHead(address)
     if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidBalance"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidBalance"}
 
     elif data["previous"] != head["id"]:
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidPrevious"}
 
     else:
-        response = {"type": "confirm", "action":"receive","address": "{address}", "id": "{blockID}"}
+        response = {"type": "confirm", "action": "receive", "address": f"{address}", "id": f"{blockID}"}
 
     return response
 
@@ -604,18 +648,16 @@ async def updateVotingWeights():  # Updates the voting weights for all accounts 
 async def verifySignature(signature, publicKey, data):
     data = data.copy()
     data.pop("signature")
-    data = json.dumps(data)
-    publicKey = publicKey.split(" ")
-    publicKey = "-----BEGIN PUBLIC KEY-----\n" + publicKey[0] + "\n" + publicKey[1] + "\n-----END PUBLIC KEY-----"
-    publicKey = ECC.import_key(publicKey)
+    data = json.dumps(data).encode()
+    publicKey = publicKey[4:56] + "===="
+    publicKey = base64.b32decode(publicKey.upper().encode())
+    verifier = VerifyKey(publicKey)
     signature = (int(signature, 16)).to_bytes(64, byteorder="little")
-    data = SHA256.new(data.encode("utf-8"))
-    verifier = DSS.new(publicKey, "fips-186-3")
     try:
         verifier.verify(data, signature)
         return True
 
-    except ValueError:
+    except BadSignatureError:
         return False
 
 
@@ -672,7 +714,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
             return False
 
     if block["type"] == "genesis":
-        if block["signature"] != "0xc9052f33ef7690bf24171ec5c4f506caeee1ab88419dc6abc0644e6033f6c526ccff87f6bc8096b0463e38e3221c054b88938408fbaada4a6148d46d38daa52b":
+        if block["signature"] != "0xbc9accb157a6c23403cc6f7d5be7f4ef77e04a38517a2105719eb1ad784ebee2479f128403e5a826b82c150ca48ce548009c9bc529f649f63dd104bd140951a":
             accounts[block["address"]][block["id"]][1] = False
             print("FAKE GENESIS DETECTED")
             return False
