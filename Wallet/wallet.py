@@ -5,6 +5,7 @@ import random
 import json
 from aioconsole import ainput
 import os
+import traceback
 
 from Crypto.PublicKey import ECC
 from Crypto.Hash import SHA256
@@ -178,6 +179,8 @@ async def websocketPoolLoop():
             resp = await asyncio.wait_for(websocket.recv(), 0.5)
             if prevRequest == "":
                 if json.loads(resp)["type"] == "sendAlert":
+                    print("sendAlert")
+                    print(resp)
                     asyncio.create_task(sendAlert(resp))
 
                 else:
@@ -189,6 +192,9 @@ async def websocketPoolLoop():
             else:
                 websocketPool[prevRequest][1] = resp
                 prevRequest = ""
+
+        except ValueError:
+            traceback.print_exc()
 
         except:
             pass
