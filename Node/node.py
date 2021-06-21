@@ -78,6 +78,8 @@ votePool = {}   # Dictionary of all ongoing votes. Structure follows:
                     # address - Str - The MXC address of the voting node.
                     # weight - Float - The voting weight of the voting node. Negative if voting against.
 
+sessionKeys = {}
+
 ip = -1
 myPort = -1
 
@@ -206,11 +208,33 @@ async def broadcast(data, **kwargs):
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
         print("Consensus reached: " + str(votePool[broadcastID]))
         if data["type"] != "open":
+            if data["type"] == "send":
+
+                if data["link"] in sendSubscriptions:
+                    head = await getHead(data["address"])
+                    sendAlert = {"type": "sendAlert", "address": data["link"],
+                                 "sendAmount": str(float(head["balance"]) - float(data["balance"])),
+                                 "link": f"{data['address']}/{data['id']}"}
+
+                    sendAlert = json.dumps(sendAlert)
+                    global sessionKeys
+
+                    for ws in sendSubscriptions[data["link"]]:
+                        try:
+                            session_key = sessionKeys[ws]
+                            cipher_aes = AES.new(session_key, AES.MODE_EAX)
+                            ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("utf-8"))
+                            await ws.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher_aes.nonce.hex())
+                            print("sent send alert")
+
+                        except websockets.exceptions.ConnectionClosedError:
+                            print("Send subscription unavailable")
+                            pass
             f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
             await f.write("\n" + json.dumps(data))
             await f.close()
-        else:
 
+        else:
             f = await aiofiles.open(f"{ledgerDir}{data['address']}", "w+")
             await f.write(json.dumps(data))
             await f.close()
@@ -540,6 +564,8 @@ async def receive(data):
 
     head = await getHead(address)
     if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
+        print(data["balance"])
+        print(float(head["balance"]) + float(sendAmount))
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidBalance"}
 
     elif data["previous"] != head["id"]:
@@ -621,29 +647,18 @@ async def send(data):
 
     head = await getHead(address)
     if float(head["balance"]) < float(data["balance"]):
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "balance"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
     elif head["id"] != data["previous"]:
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "invalidPrevious"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidPrevious"}
 
     else:
-        response = {"type": "confirm", "action": "send", "address": "{address}", "id": "{blockID}"}
+        response = {"type": "confirm", "action": "send", "address": f"{address}", "id": f"{blockID}"}
 
     if response["type"] != "confirm":
         return response
 
-    if data["link"] in sendSubscriptions:
-        sendAlert = {"type": "sendAlert", "address": data["link"],
-                     "sendAmount": str(float(head["balance"]) - float(data["balance"])),
-                     "link": f"{address}/{blockID}"}
 
-        sendAlert = json.dumps(sendAlert)
-        for ws in sendSubscriptions[data["link"]]:
-            try:
-                await ws.send(sendAlert)
-
-            except websockets.exceptions.ConnectionClosedError:
-                pass
 
     return response
 
@@ -977,7 +992,10 @@ async def incoming(websocket, path):
     session_key = get_random_bytes(16)
     cipher_rsa = PKCS1_OAEP.new(recipientKey)
     enc_session_key = cipher_rsa.encrypt(session_key)
-    await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": enc_session_key.hex()}))
+    global sessionKeys
+    sessionKey = enc_session_key.hex()
+    sessionKeys[websocket] = session_key
+    await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": sessionKey}))
 
     print(f"Client Connected: {websocket.remote_address[0]}")
     while True:
