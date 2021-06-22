@@ -250,8 +250,6 @@ async def main():
     await wsRequest(json.dumps(req))
 
     while True:
-        blockID = str(random.randint(0, 99999999999999999999))
-        blockID = "0" * (20 - len(blockID)) + blockID
         action = await ainput("Send or Delegate? (s/d) ")
         if action == "s":
             sendAddress = await ainput("Send Address: ")
@@ -275,8 +273,11 @@ async def main():
             response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
             representative = json.loads(response)["representative"]
 
-            data = {"type": "send", "address": f"{publicKeyStr}", "link": f"{sendAddress}", "balance": f"{newBalance}", "id": f"{blockID}", "previous": previous, "representative": representative}
+            data = {"type": "send", "address": f"{publicKeyStr}", "link": f"{sendAddress}", "balance": f"{newBalance}", "previous": previous, "representative": representative}
 
+            hasher = BLAKE2b.new(digest_bits=512)
+            blockID = hasher.update(json.dumps(data).encode("utf-8")).hexdigest()
+            data["id"] = blockID
             signature = await genSignature(data, privateKey)
             data = {**data, **{"signature": f"{signature}"}}
             resp = await wsRequest(json.dumps(data))
