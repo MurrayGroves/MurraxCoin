@@ -51,7 +51,6 @@ class websocketSecure:
         self.websocket = await websockets.connect(self.url)
         await self.websocket.send(handshakePublicKeyStr)
         handshakeData = await self.websocket.recv()
-        print("Data: " + handshakeData)
         handshakeData = json.loads(handshakeData)
 
         sessionKey = bytes.fromhex(handshakeData["sessionKey"])
@@ -117,8 +116,6 @@ addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=",
 address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
 publicKeyStr = f"mxc_{address}{addressChecksum}"
 print(f"Your address: {publicKeyStr}")
-print(publicKeyStr[4:56])
-print(publicKeyStr[56:])
 
 doBackgroundCheck = True
 websocket = None
@@ -158,11 +155,12 @@ async def receive(sendAmount, block):
     if resp["type"] == "confirm":
         receiveAmount = sendAmount
         newBalance = block["balance"]
-        print(f"Received MXC: {receiveAmount}")
+        print(f"\nReceived MXC: {receiveAmount}")
         print(f"New Balance: {newBalance}")
+        print("Send or Delegate? (s/d)")
 
     else:
-        print("Failed to receive MXC!")
+        print("\nFailed to receive MXC!")
         print(resp)
 
 
@@ -179,8 +177,6 @@ async def websocketPoolLoop():
             resp = await asyncio.wait_for(websocket.recv(), 0.5)
             if prevRequest == "":
                 if json.loads(resp)["type"] == "sendAlert":
-                    print("sendAlert")
-                    print(resp)
                     asyncio.create_task(sendAlert(resp))
 
                 else:
@@ -203,13 +199,11 @@ async def websocketPoolLoop():
             poolKeys = list(websocketPool.keys())
             if websocketPool[poolKeys[0]][1] == "":
                 await websocket.send(websocketPool[poolKeys[0]][0])
-                print("sent: " + websocketPool[poolKeys[0]][0])
                 prevRequest = poolKeys[0]
                 websocketPool[poolKeys[0]][1] = 0
 
 
 async def wsRequest(request):
-    print("wsRequest: " + request)
     global websocketPool
     requestID = random.randint(0, 99999999999999)
     websocketPool[requestID] = [request, ""]
@@ -228,7 +222,7 @@ async def ping():
 
 async def main():
     global websocket
-    uri = "ws://localhost:6969"
+    uri = "ws://murraxcoin.murraygrov.es:6969"
     websocket = await websocketSecure.connect(uri)
 
     asyncio.create_task(websocketPoolLoop())
