@@ -19,6 +19,7 @@ pycparser==2.20
 pycryptodome==3.10.1
 pyinstaller==4.2
 pyinstaller-hooks-contrib==2021.1
+pynacl==1.4.0
 pywin32-ctypes==0.2.0
 requests==2.25.1
 typing-extensions==3.7.4.3
