@@ -11,10 +11,11 @@ import socket
 import os
 import asyncio
 import random
+from distutils.dir_util import copy_tree
+import sys
 import traceback
 
 # Signing
-from Crypto.Signature import DSS
 from Crypto.PublicKey import ECC
 from nacl.signing import SigningKey
 from nacl.signing import VerifyKey
@@ -655,11 +656,6 @@ async def send(data):
     else:
         response = {"type": "confirm", "action": "send", "address": f"{address}", "id": f"{blockID}"}
 
-    if response["type"] != "confirm":
-        return response
-
-
-
     return response
 
 
@@ -786,12 +782,13 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
     usedAsPrevious.append(block["address"] + "/" + prevBlock["id"])
     return toReturn
 
+
 # Verifies EVERY transaction in the ledger (should probably only be called after downloading the ledger)
-async def verifyLedger():
+async def verifyLedger(directory):
     accounts = {}
-    accountsDir = os.listdir(ledgerDir)
+    accountsDir = os.listdir(directory)
     for account in accountsDir:
-        f = await aiofiles.open(ledgerDir + account)
+        f = await aiofiles.open(directory + account)
         data = await f.read()
         await f.close()
 
@@ -815,8 +812,11 @@ async def verifyLedger():
         for block in accounts[accountName]:
             if not accounts[accountName][block][1]:
                 print("BLOCK NOT VALID!!!!!")
+                print(f"{accountName}/{block}")
+                return False
 
     print("Ledger Verified!")
+    return True
 
 
 async def vote(data, **kwargs):
@@ -1040,31 +1040,103 @@ async def ledgerServer(websocket, url):
     await websocket.send("ayothatsall")
 
 
-# Fetches the ledger from the specified node
-async def fetchLedger(node):
-    node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
-    print(node)
-    websocket = await websockets.connect(node)
+async def bootstrap():
+    # 1 - Get a dictionary of current account heads
+    # 2 - Ask top 20 nodes for their account heads
+    # 3 - Choose set of heads with most voting weight
+    # 4 - Download all transactions since our heads
+    # 5 - Verify those transactions locally
+    # 6 - If valid, overwrite stored ledger
+    # 7 - If not valid, download from another node
 
-    accounts = {}
-    msg = await websocket.recv()
-    while msg != "ayothatsall":
-        curAccount = msg.replace("Account:", "")
-        accounts[curAccount] = []
-        msg = await websocket.recv()
-        while "Account:" not in msg and "ayothatsall" not in msg:
-            accounts[curAccount].append(msg)
-            msg = await websocket.recv()
+    copy_tree(ledgerDir, f"{ledgerDir}-Bootstrap")
 
-    for account in accounts:
-        toWrite = ""
-        for block in accounts[account]:
-            toWrite = toWrite + "\n" + block
+    heads = {}  # Dictionary of account - head_ID mappings
+    for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
+        head = await getHead(account)
+        heads[account] = head["id"]
 
-        toWrite = toWrite.replace("\n", "", 1)
-        f = await aiofiles.open(ledgerDir + account, "w+")
-        await f.write(toWrite)
-        await f.close()
+    newHeads = {}
+    sortedWeights = reversed(dict(sorted(nodes.items(), key=lambda item: item[1][2])))  # Get a sorted dictionary of ip - weight mappings
+    count = 0
+    for node in sortedWeights:
+        if count >= 20:  # Only get heads from top 20 nodes so it's faster
+            break
+
+        count += 1
+
+        _, node, port = node.split(":")
+        node = f"ws://{node}:{int(port)+1}"  # Get node's bootstrap address
+        ws = await websocketSecure.connect(node)
+        request = {"type": "getHeads"}
+        await ws.send(json.dumps(request))  # Ask node to start sending over their heads
+
+        resp = ""
+        nodeHeads = {}
+        while resp != json.dumps({"type": "endHeadsTransmission"}):  # Can only receive 320 account heads per message
+            resp = await ws.recv()
+            accounts = resp.split("/")
+            for account in accounts:
+                accountAddress, head = account.split("+")
+                nodeHeads[accountAddress] = head  # Add each account's head to nodeHeads
+
+        newHeads[node] = nodeHeads  # Add each node's heads to newHeads
+
+    combinedHeads = []
+    for node in newHeads:  # Combine submitted heads
+        nodeHeads = newHeads[node]  # Get current node's submitted heads
+        combined = False  # Assume nodeHeads is not already in combinedHeads
+        for i in range(len(combinedHeads)):  # Iterate through combinedHeads
+            if nodeHeads == combinedHeads[i][0]:  # If nodeHeads in combinedHeads
+                combinedHeads[i][1] += sortedWeights[node]  # Add node's voting weight to the existing heads
+                combined = True  # nodeHeads is already in combined heads
+                break  # No need to continue searching
+
+        if not combined:  # If nodeHeads not already in combinedHeads
+            combinedHeads.append([newHeads[node], sortedWeights[node]])  # Add to combinedHeads
+
+    combinedHeads = sorted(combinedHeads, key=lambda item: item[1])
+    chosenHeads = combinedHeads[-1]  # Find most voted set of heads
+
+    possibleNodes = []   # List of nodes who provided the chosen heads
+    for node in newHeads:
+        if newHeads[node] == chosenHeads:
+            possibleNodes.append(node)
+
+    valid = False
+    while not valid:
+        if len(possibleNodes) <= 0:
+            print("All nodes returned invalid ledgers!!! THIS IS TERRIBLE OH GOD")
+            sys.exit()
+
+        node = random.choice(possibleNodes)
+
+        ws = await websocketSecure.connect(f"ws://{node}:{int(port)+1}")
+        for account in chosenHeads:
+            if account not in heads or heads[account] != chosenHeads[account]:  # If we don't have that account, or it has been updated
+                try:
+                    ourHead = heads[account]
+
+                except KeyError:  # If we do not have the account, fetch entire account
+                    ourHead = ""
+
+                req = {"type": "requestAccount", "head": ourHead}
+                await ws.send(json.dumps(req))
+                blocks = ""
+                resp = ""
+                while resp != json.dumps({"type": "endAccountTransmission"}):
+                    resp = await ws.recv()
+                    blocks = blocks + resp + "\n"
+
+                blocks = blocks[:-2]  # Remove the trailing \n
+                f = await aiofiles.open(f"{ledgerDir}-Bootstrap/{account}", "a+")
+                await f.write(blocks)
+                await f.close()
+
+        valid = await verifyLedger(f"{ledgerDir}-Bootstrap")
+        possibleNodes.pop(node)
+
+
 
 
 # Check if node running on given url
@@ -1130,6 +1202,7 @@ async def run():
     print(f"Booting on {ip}:{myPort}")
     await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
     await updateVotingWeights()
+    await bootstrap()
     await asyncio.Event().wait()
 
 asyncio.run(run())
