@@ -11,7 +11,7 @@ import socket
 import os
 import asyncio
 import random
-from distutils.dir_util import copy_tree
+import shutil
 import sys
 import traceback
 
@@ -63,7 +63,7 @@ os.makedirs(ledgerDir, exist_ok=True)
 
 # Initialise global variables
 nodes = {}  # Dictionary of all connected nodes. Structure follows:
-            #   {ip : websocket}
+            #   {ip : [websocket, weight]}
             #     ip - str - The IP/hostname that the node can be reached by. Includes port and "ws://" prefix
             #     websocket - websockets.Websocket - the websocket that the node can be reached on.
 
@@ -102,6 +102,19 @@ except FileNotFoundError:
 handshakePublicKey = handshakeKey.publickey()
 handshakePublicKeyStr = handshakePublicKey.export_key()
 handshakeCipher = PKCS1_OAEP.new(handshakeKey)
+
+
+async def copytree(src, dst, symlinks=False, ignore=None):
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            copytree(s, d, symlinks, ignore)
+        else:
+            if not os.path.exists(d) or os.stat(s).st_mtime - os.stat(d).st_mtime > 1:
+                shutil.copy2(s, d)
 
 
 class websocketSecure:
@@ -1049,7 +1062,7 @@ async def bootstrap():
     # 6 - If valid, overwrite stored ledger
     # 7 - If not valid, download from another node
 
-    copy_tree(ledgerDir, f"{ledgerDir}-Bootstrap")
+    await copytree(ledgerDir, f"{ledgerDir}-Bootstrap")
 
     heads = {}  # Dictionary of account - head_ID mappings
     for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
@@ -1136,7 +1149,7 @@ async def bootstrap():
         valid = await verifyLedger(f"{ledgerDir}-Bootstrap")
         possibleNodes.pop(node)
 
-
+    await copytree(f"{ledgerDir}-Bootstrap", ledgerDir)
 
 
 # Check if node running on given url
