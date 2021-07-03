@@ -611,7 +611,7 @@ async def registerMyself(node, doRespond):
     print("Done registering")
 
 
-async def registerNode(data, websocket):
+async def registerNode(data, ws):
     response = {"type": "confirm", "action": "registerNode"}
     try:
         weight = float(votingWeights[data["address"]])
@@ -619,9 +619,9 @@ async def registerNode(data, websocket):
     except KeyError:  # No one has delegated the node's address
         weight = 0
 
-    nodes[f"ws://{websocket.remote_address[0]}:{data['port']}"] = [None, data["address"], weight]
+    nodes[f"ws://{ws.remote_address[0]}:{data['port']}"] = [None, data["address"], weight]
     if data["respond"] == "True":
-        await registerMyself(f"ws://{websocket.remote_address[0]}:{data['port']}", doRespond=False)
+        await registerMyself(f"ws://{ws.remote_address[0]}:{data['port']}", doRespond=False)
 
     return response
 
