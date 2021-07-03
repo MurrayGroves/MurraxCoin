@@ -11,10 +11,11 @@ import socket
 import os
 import asyncio
 import random
+import shutil
+import sys
 import traceback
 
 # Signing
-from Crypto.Signature import DSS
 from Crypto.PublicKey import ECC
 from nacl.signing import SigningKey
 from nacl.signing import VerifyKey
@@ -30,10 +31,13 @@ from Crypto.Cipher import AES, PKCS1_OAEP
 import base64
 import zlib
 
+if __name__ == "__main__":
+    # Other MurraxCoin components
+    from bootstrapServer import bootstrap_server
+
 # Configuration Variables
-entrypoints = ["ws://qwhwdauhdasht.ddns.net:6969", "ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
-ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
-#publicFile = "../public_key.pem"  # Path of the node's public key
+entrypoints = ["ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
+ledgerDir = "Accounts2/"  # Path to the directory where the ledger will be stored (must end in /)
 privateFile = "../genesis.pem"  # Path of the node's private key
 consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
@@ -62,7 +66,7 @@ os.makedirs(ledgerDir, exist_ok=True)
 
 # Initialise global variables
 nodes = {}  # Dictionary of all connected nodes. Structure follows:
-            #   {ip : websocket}
+            #   {ip : [websocket, weight]}
             #     ip - str - The IP/hostname that the node can be reached by. Includes port and "ws://" prefix
             #     websocket - websockets.Websocket - the websocket that the node can be reached on.
 
@@ -101,6 +105,19 @@ except FileNotFoundError:
 handshakePublicKey = handshakeKey.publickey()
 handshakePublicKeyStr = handshakePublicKey.export_key()
 handshakeCipher = PKCS1_OAEP.new(handshakeKey)
+
+
+async def copytree(src, dst, symlinks=False, ignore=None):
+    if not os.path.exists(dst):
+        os.makedirs(dst)
+    for item in os.listdir(src):
+        s = os.path.join(src, item)
+        d = os.path.join(dst, item)
+        if os.path.isdir(s):
+            copytree(s, d, symlinks, ignore)
+        else:
+            if not os.path.exists(d) or os.stat(s).st_mtime - os.stat(d).st_mtime > 1:
+                shutil.copy2(s, d)
 
 
 class websocketSecure:
@@ -197,6 +214,7 @@ async def broadcast(data, **kwargs):
     print("Broadcast: " + json.dumps(packet))
     packet["signature"] = signature
 
+    print(publicKeyStr)
     weight = await balance({"address": publicKeyStr})
     weight = float(weight["balance"])
 
@@ -373,8 +391,8 @@ async def genSignature(data, privateKey):
 
 
 # Return a block belonging to the account (address) with block ID (blockID)
-async def getBlock(address, blockID):
-    f = await aiofiles.open(f"{ledgerDir}{address}")
+async def getBlock(address, blockID, directory=ledgerDir):
+    f = await aiofiles.open(f"{directory}{address}")
     fileStr = await f.read()
     await f.close()
     fileStr = fileStr.splitlines()
@@ -412,8 +430,8 @@ async def getRepresentative(data, **kwargs):  # Get address of an account's repr
 
 
 # Get the head block of an account (the most recent block)
-async def getHead(address, **kwargs):
-    f = await aiofiles.open(f"{ledgerDir}{address}")
+async def getHead(address, directory=ledgerDir,**kwargs):
+    f = await aiofiles.open(f"{directory}{address}")
     fileStr = await f.read()
     await f.close()
     fileStr = fileStr.splitlines()
@@ -655,11 +673,6 @@ async def send(data):
     else:
         response = {"type": "confirm", "action": "send", "address": f"{address}", "id": f"{blockID}"}
 
-    if response["type"] != "confirm":
-        return response
-
-
-
     return response
 
 
@@ -706,7 +719,7 @@ async def verifySignature(signature, publicKey, data):
 
 
 # Verify given block in dictionary accounts recursively
-async def verifyBlock(accounts, block, usedAsPrevious=[]):
+async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
     if accounts[block["address"]][block["id"]][1]:
         return True
 
@@ -728,7 +741,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
         return False
 
     if block["type"] != "open" and block["type"] != "genesis":
-        prevBlock = await getBlock(block["address"], block["previous"])
+        prevBlock = await getBlock(block["address"], block["previous"], directory=directory)
 
     # if send block, verify previous block balance is more than current balance
     if block["type"] == "send":
@@ -739,8 +752,8 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
 
     # if receive/open block, calculate the send amount and check if the new balance matches
     if block["type"] in ["receive", "open"]:
-        sendBlock = await getBlock(block["link"].split("/")[0], block["link"].split("/")[1])
-        sendPrevious = await getBlock(sendBlock["address"], sendBlock["previous"])
+        sendBlock = await getBlock(block["link"].split("/")[0], block["link"].split("/")[1], directory=directory)
+        sendPrevious = await getBlock(sendBlock["address"], sendBlock["previous"], directory=directory)
         sendAmount = float(sendPrevious["balance"]) - float(sendBlock["balance"])
 
         previousBalance = 0
@@ -786,12 +799,13 @@ async def verifyBlock(accounts, block, usedAsPrevious=[]):
     usedAsPrevious.append(block["address"] + "/" + prevBlock["id"])
     return toReturn
 
+
 # Verifies EVERY transaction in the ledger (should probably only be called after downloading the ledger)
-async def verifyLedger():
+async def verifyLedger(directory):
     accounts = {}
-    accountsDir = os.listdir(ledgerDir)
+    accountsDir = os.listdir(directory)
     for account in accountsDir:
-        f = await aiofiles.open(ledgerDir + account)
+        f = await aiofiles.open(directory + account)
         data = await f.read()
         await f.close()
 
@@ -808,15 +822,18 @@ async def verifyLedger():
         for block in accounts[accountName]:
             block = accounts[accountName][block][0]
             if accounts[accountName][block["id"]][1] == None:
-                await verifyBlock(accounts, block)
+                await verifyBlock(accounts, block, directory=directory)
 
     accountNames = accounts.keys()
     for accountName in accountNames:
         for block in accounts[accountName]:
             if not accounts[accountName][block][1]:
                 print("BLOCK NOT VALID!!!!!")
+                print(f"{accountName}/{block}")
+                return False
 
     print("Ledger Verified!")
+    return True
 
 
 async def vote(data, **kwargs):
@@ -1040,31 +1057,120 @@ async def ledgerServer(websocket, url):
     await websocket.send("ayothatsall")
 
 
-# Fetches the ledger from the specified node
-async def fetchLedger(node):
-    node = node.split(":")[0] + ":" + node.split(":")[1] + ":" + str(int(node.split(":")[2])+1)
-    print(node)
-    websocket = await websockets.connect(node)
+async def bootstrap():
+    # 1 - Get a dictionary of current account heads
+    # 2 - Ask top 20 nodes for their account heads
+    # 3 - Choose set of heads with most voting weight
+    # 4 - Download all transactions since our heads
+    # 5 - Verify those transactions locally
+    # 6 - If valid, overwrite stored ledger
+    # 7 - If not valid, download from another node
 
-    accounts = {}
-    msg = await websocket.recv()
-    while msg != "ayothatsall":
-        curAccount = msg.replace("Account:", "")
-        accounts[curAccount] = []
-        msg = await websocket.recv()
-        while "Account:" not in msg and "ayothatsall" not in msg:
-            accounts[curAccount].append(msg)
-            msg = await websocket.recv()
+    await copytree(ledgerDir, f"{ledgerDir.replace('/','')}-Bootstrap")
 
-    for account in accounts:
-        toWrite = ""
-        for block in accounts[account]:
-            toWrite = toWrite + "\n" + block
+    heads = {}  # Dictionary of account - head_ID mappings
+    for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
+        head = await getHead(account)
+        heads[account] = head["id"]
 
-        toWrite = toWrite.replace("\n", "", 1)
-        f = await aiofiles.open(ledgerDir + account, "w+")
-        await f.write(toWrite)
-        await f.close()
+    newHeads = {}
+    print(nodes)
+    sortedWeights = reversed(dict(sorted(nodes.items(), key=lambda item: item[1][2])))  # Get a sorted dictionary of ip - weight mappings
+    count = 0
+    for node in sortedWeights:
+        if count >= 20:  # Only get heads from top 20 nodes so it's faster
+            break
+
+        count += 1
+
+        _, node, port = node.split(":")
+        node = f"ws:{node}:{int(port)+1}"  # Get node's bootstrap address
+        ws = await websocketSecure.connect(node)
+        request = {"type": "getHeads"}
+        await ws.send(json.dumps(request))  # Ask node to start sending over their heads
+
+        resp = ""
+        nodeHeads = {}
+        end = json.dumps({"type": "endHeadsTransmission"})
+        while resp != end:  # Can only receive 320 account heads per message
+            resp = await ws.recv()
+            accounts = resp.split("/")
+            for account in accounts:
+                try:
+                    accountAddress, head = account.split("+")
+
+                except ValueError:  # End of transmission
+                    pass
+                nodeHeads[accountAddress] = head  # Add each account's head to nodeHeads
+
+        newHeads[node] = nodeHeads  # Add each node's heads to newHeads
+        await ws.close()
+
+    combinedHeads = []
+    for node in newHeads:  # Combine submitted heads
+        _, nodeOriginal, port = node.split(":")
+        nodeOriginal = f"ws:{nodeOriginal}:{int(port)-1}"
+        nodeHeads = newHeads[node]  # Get current node's submitted heads
+        combined = False  # Assume nodeHeads is not already in combinedHeads
+        for i in range(len(combinedHeads)):  # Iterate through combinedHeads
+            if nodeHeads == combinedHeads[i][0]:  # If nodeHeads in combinedHeads
+                combinedHeads[i][1] += nodes[nodeOriginal][1][2]  # Add node's voting weight to the existing heads
+                combined = True  # nodeHeads is already in combined heads
+                break  # No need to continue searching
+
+        if not combined:  # If nodeHeads not already in combinedHeads
+            combinedHeads.append([newHeads[node], nodes[nodeOriginal][1][2]])  # Add to combinedHeads
+
+    combinedHeads = sorted(combinedHeads, key=lambda item: item[1])
+    chosenHeads = combinedHeads[-1][0]  # Find most voted set of heads
+
+    possibleNodes = []   # List of nodes who provided the chosen heads
+    for node in newHeads:
+        print(newHeads[node])
+        if newHeads[node] == chosenHeads:
+            possibleNodes.append(node)
+
+    valid = False
+    while not valid:
+        if len(possibleNodes) <= 0:
+            print("All nodes returned invalid ledgers!!! THIS IS TERRIBLE OH GOD")
+            sys.exit()
+
+        node = random.choice(possibleNodes)
+
+        ws = await websocketSecure.connect(node)
+        for account in chosenHeads:
+            if account not in heads or heads[account] != chosenHeads[account]:  # If we don't have that account, or it has been updated
+                try:
+                    ourHead = heads[account]
+
+                except KeyError:  # If we do not have the account, fetch entire account
+                    ourHead = ""
+
+                req = {"type": "requestAccount", "head": ourHead, "address": account}
+                await ws.send(json.dumps(req))
+                blocks = ""
+                resp = ""
+                end = json.dumps({"type": "endAccountTransmission"})
+                while resp != end:
+                    resp = await ws.recv()
+                    blocks = blocks + resp + "\n"
+
+                blocks = blocks.replace('{"type": "endAccountTransmission"}', '')
+                blocks = blocks.strip()
+                if ourHead != "":
+                    blocks = "\n" + blocks
+
+                f = await aiofiles.open(f"{ledgerDir.replace('/','')}-Bootstrap/{account}", "a+")
+                await f.write(blocks)
+                await f.close()
+
+        valid = await verifyLedger(f"{ledgerDir.replace('/','')}-Bootstrap/")
+        possibleNodes.pop(possibleNodes.index(node))
+        await ws.close()
+
+    await copytree(f"{ledgerDir.replace('/','')}-Bootstrap", ledgerDir)
+    shutil.rmtree(f"{ledgerDir.replace('/','')}-Bootstrap")
 
 
 # Check if node running on given url
@@ -1121,15 +1227,13 @@ async def run():
 
         await registerMyself(f"ws://{nodeIP}:{nodePort}", doRespond=True)
 
-    print(nodes)
-    if len(list(nodes.keys())) != 0:
-        await fetchLedger(random.choice(list(nodes.keys())))
-
-    await verifyLedger()
 
     print(f"Booting on {ip}:{myPort}")
-    await websockets.serve(ledgerServer, "0.0.0.0", myPort+1)
+    await websockets.serve(bootstrap_server, "0.0.0.0", myPort+1)
     await updateVotingWeights()
+    if len(nodes) != 0:
+        await bootstrap()
     await asyncio.Event().wait()
 
-asyncio.run(run())
+if __name__ == "__main__":
+    asyncio.run(run())
