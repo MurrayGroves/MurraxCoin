@@ -218,9 +218,26 @@ async def broadcast(data, **kwargs):
     weight = await balance({"address": publicKeyStr})
     weight = float(weight["balance"])
 
+    offline = False if len(nodes) == 0 else True  # If nodes are connected but none are responsive, reboot
     onlineWeight = weight
     for node in nodes:
+        ws = nodes[node][0]
+        try:
+            await ws.send('{"type": "ping"}')
+            resp = await ws.recv()
+            offline = False
+            if json.loads(resp)["type"] == "confirm":
+                print("Available", node)
+
+        except Exception as e:
+            print("Error: " + str(e))
+            nodes.pop(node)
+            pass
         onlineWeight += nodes[node][2]
+
+    if offline:
+        await asyncio.sleep(60)
+        os.execv(sys.argv[0], sys.argv)
 
     votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
@@ -878,9 +895,26 @@ async def vote(data, **kwargs):
 
         return {"type": "confirm", "action": "vote"}
 
+    offline = False if len(nodes) == 0 else True  # If nodes are connected but none are responsive, reboot
     onlineWeight = 0
     for node in nodes:
+        ws = nodes[node][0]
+        try:
+            await ws.send('{"type": "ping"}')
+            resp = await ws.recv()
+            offline = False
+            if json.loads(resp)["type"] == "confirm":
+                print("Available", node)
+
+        except Exception as e:
+            print("Error: " + str(e))
+            nodes.pop(node)
+            pass
         onlineWeight += nodes[node][2]
+        
+    if offline:
+        await asyncio.sleep(60)
+        os.execv(sys.argv[0], sys.argv)
 
     votePool[data["voteID"]] = [onlineWeight * consensusPercent, weight, json.loads(data["block"]), [[data, weight]], False]
     if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
