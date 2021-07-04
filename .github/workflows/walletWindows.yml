@@ -28,8 +28,6 @@ jobs:
       with:
         certificate: '${{ secrets.CERTIFICATE }}'
         password: '${{ secrets.PASSWORD }}'
-        certificatesha1: '${{ secrets.CERTHASH }}'
-        certificatename: '${{ secrets.CERTNAME }}'
         folder: 'Wallet/dist/windows'
         
   upload-artifact:
