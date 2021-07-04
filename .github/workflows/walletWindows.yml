@@ -21,6 +21,7 @@ jobs:
 
         
   sign:
+    needs: build
     runs-on: windows-latest
     steps:
     - uses: Dana-Woo/code-sign-action@v4
@@ -32,6 +33,7 @@ jobs:
         folder: 'Wallet/dist/windows'
         
   upload-artifact:
+    needs: sign
     runs-on: ubuntu-latest
     steps:
       - uses: actions/upload-artifact@v2
