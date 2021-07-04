@@ -17,7 +17,6 @@ from nacl.signing import SigningKey
 import base64
 import zlib
 
-privateFile = input("Private Key Path: ")
 
 websocketPool = {}
 
@@ -25,15 +24,77 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import AES, PKCS1_OAEP
 
 
+if os.name == "nt":
+    storageDir = os.path.expanduser("%APPDATA%/MurraxCoin/Wallet/")
+
+else:
+    storageDir = os.path.expanduser("~/.MurraxCoin/Wallet/")
+    
+os.makedirs(f"{storageDir}keys", exist_ok=True)
+
+if len(os.listdir(storageDir + "keys")) == 0:  # If first boot
+    keyName = input("New account name: ")
+    seed = os.urandom(32)
+    privateKey = SigningKey(seed)
+    f = open(f"{storageDir}keys/{keyName}", "wb+")
+    f.write(seed)
+    f.close()
+
+
+def printAccounts():
+    print("Accounts")
+    print("========")
+
+    count = 0
+    for key in os.listdir(f"{storageDir}keys"):
+        count += 1
+        f = open(f"{storageDir}keys/{key}", "rb")
+        privateKey = SigningKey(f.read())
+        f.close()
+
+        publicKey = privateKey.verify_key
+        addressChecksum = zlib.adler32(publicKey.encode()).to_bytes(4, byteorder="big")
+        addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
+        address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
+        publicKeyStr = f"mxc_{address}{addressChecksum}"
+        print(f"{count}. | {publicKeyStr} | {key}")
+
+
+printAccounts()
+while (keyNum := input("Choose an account (by number), or '+' to add a new one: ")) == "+":
+    account = input("New account name: ")
+    seed = os.urandom(32)
+    privateKey = SigningKey(seed)
+    f = open(f"{storageDir}keys/{account}", "wb+")
+    f.write(seed)
+    f.close()
+    printAccounts()
+
+
+keyNum = int(keyNum)
+privateFile = os.listdir(f"{storageDir}keys")[keyNum-1]
+f = open(f"{storageDir}keys/{privateFile}", "rb")
+privateKey = SigningKey(f.read())
+f.close()
+
+publicKey = privateKey.verify_key
+addressChecksum = zlib.adler32(publicKey.encode()).to_bytes(4, byteorder="big")
+addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
+address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
+publicKeyStr = f"mxc_{address}{addressChecksum}"
+
+print(f"Selected {privateFile}")
+print(f"Your address is {publicKeyStr}")
+
 try:
-    f = open("handshake_key.pem", "rb")
+    f = open(f"{storageDir}handshake_key.pem", "rb")
     handshakeKey = RSA.import_key(f.read())
     f.close()
 
 except FileNotFoundError:
     handshakeKey = RSA.generate(2048)
     toWrite = handshakeKey.export_key()
-    f = open("handshake_key.pem", "wb+")
+    f = open(f"{storageDir}handshake_key.pem", "wb+")
     f.write(toWrite)
     f.close()
     del toWrite
@@ -97,25 +158,7 @@ async def genSignature(data, privateKey):
 
     return signature
 
-try:
-    f = open(privateFile, "rb")
-    privateKey = SigningKey(f.read())
-    f.close()
 
-except:
-    seed = os.urandom(32)
-    privateKey = SigningKey(seed)
-    f = open(privateFile, "wb+")
-    f.write(seed)
-    f.close()
-
-publicKey = privateKey.verify_key
-
-addressChecksum = zlib.adler32(publicKey.encode()).to_bytes(4, byteorder="big")
-addressChecksum = base64.b32encode(addressChecksum).decode("utf-8").replace("=", "").lower()
-address = base64.b32encode(publicKey.encode()).decode("utf-8").replace("=", "").lower()
-publicKeyStr = f"mxc_{address}{addressChecksum}"
-print(f"Your address: {publicKeyStr}")
 
 doBackgroundCheck = True
 websocket = None
