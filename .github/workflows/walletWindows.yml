@@ -19,7 +19,22 @@ jobs:
       with:
         path: Wallet
 
-    - uses: actions/upload-artifact@v2
+        
+  sign:
+    runs-on: windows-latest
+    steps:
+    - uses: DanaBear/code-sign-action@v4
       with:
-        name: wallet-windows
-        path: Wallet/dist/windows
+        certificate: '${{ secrets.CERTIFICATE }}'
+        password: '${{ secrets.PASSWORD }}'
+        certificatesha1: '${{ secrets.CERTHASH }}'
+        certificatename: '${{ secrets.CERTNAME }}'
+        folder: 'Wallet/dist/windows'
+        
+  upload-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v2
+        with:
+          name: wallet-windows
+          path: Wallet/dist/windows
