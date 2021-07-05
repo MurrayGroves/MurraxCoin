@@ -51,7 +51,7 @@ jobs:
         path: unsigned
         
 
-    - uses: Dana-Woo/code-sign-action@v4
+    - uses: DadeSystems/code-sign-action@v4
       with:
         certificate: '${{ secrets.CERTIFICATE }}'
         password: '${{ secrets.PASSWORD }}'
