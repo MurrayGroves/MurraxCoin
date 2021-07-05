@@ -1,6 +1,7 @@
 name: Package Wallet for Windows with Pyinstaller
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
