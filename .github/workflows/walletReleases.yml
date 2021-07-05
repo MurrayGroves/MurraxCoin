@@ -57,6 +57,7 @@ jobs:
         password: '${{ secrets.PASSWORD }}'
         certificatename: '${{ secrets.CERTNAME }}'
         folder: 'unsigned'
+        timestampUrl: 'http://timestamp.digicert.com'
         
     - uses: actions/upload-artifact@v2
       with:
