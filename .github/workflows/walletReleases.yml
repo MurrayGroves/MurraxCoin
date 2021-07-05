@@ -41,53 +41,21 @@ jobs:
         path: Wallet/dist/linux
 
         
-  sign:
-    needs: build
-    runs-on: windows-latest
-    steps:
-    - uses: actions/download-artifact@v2
-      with:
-        name: wallet-windows
-        path: unsigned
-        
-
-    - uses: MurrayGroves/code-sign-action@v6
-      with:
-        certificate: '${{ secrets.CERTIFICATE }}'
-        password: '${{ secrets.PASSWORD }}'
-        certificatename: '${{ secrets.CERTNAME }}'
-        folder: 'unsigned'
-        timestampUrl: 'http://timestamp.digicert.com'
-        
-    - uses: actions/upload-artifact@v2
-      with:
-        name: wallet-windows-signed
-        path: unsigned
-        
   release:
-    needs: sign
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v2
         with:
           name: wallet-windows
-          path: unsigned
+          path: windows
       
-      - uses: actions/download-artifact@v2
-        with:
-          name: wallet-windows-signed
-          path: signed
 
       - uses: actions/download-artifact@v2
         with:
           name: wallet-linux
           path: linux
-          
-      - name: copy file
-        uses: canastro/copy-file-action@master
-        with:
-          source: "unsigned/wallet.exe"
-          target: "unsigned/wallet-unsigned.exe"
+
     
       - name: "Build & test"
         uses: "marvinpinto/action-automatic-releases@latest"
@@ -97,8 +65,7 @@ jobs:
           automatic_release_tag: latest
           title: Wallet
           files: |
-            unsigned/wallet-unsigned.exe
-            signed/wallet.exe
+            windows/wallet.exe
             linux/wallet
             
           
