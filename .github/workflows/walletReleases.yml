@@ -50,22 +50,17 @@ jobs:
         name: wallet-windows
         path: unsigned
         
-    - name: Copy unsigned exe
-      uses: canastro/copy-file-action@master
-      with:
-        source: "unsigned/wallet.exe"
-        target: "signed/wallet.exe"
 
     - uses: Dana-Woo/code-sign-action@v4
       with:
         certificate: '${{ secrets.CERTIFICATE }}'
         password: '${{ secrets.PASSWORD }}'
-        folder: 'signed'
+        folder: 'unsigned'
         
     - uses: actions/upload-artifact@v2
       with:
         name: wallet-windows-signed
-        path: signed
+        path: unsigned
         
   release:
     needs: sign
