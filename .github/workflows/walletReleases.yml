@@ -82,6 +82,12 @@ jobs:
         with:
           name: wallet-linux
           path: linux
+          
+      - name: copy file
+        uses: canastro/copy-file-action@master
+        with:
+          source: "unsigned/wallet.exe"
+          target: "unsigned/wallet-unsigned.exe"
     
       - name: "Build & test"
         uses: "marvinpinto/action-automatic-releases@latest"
@@ -91,7 +97,7 @@ jobs:
           automatic_release_tag: latest
           title: Wallet
           files: |
-            unsigned/wallet.exe
+            unsigned/wallet-unsigned.exe
             signed/wallet.exe
             linux/wallet
             
