@@ -1,0 +1,98 @@
+name: Package Wallet for Windows with Pyinstaller
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'Wallet'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Wallet'
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Package Application Windows
+      uses: JackMcKew/pyinstaller-action-windows@main
+      with:
+        path: Wallet
+        
+    - name: Package Application Linux
+      uses: JackMcKew/pyinstaller-action-linux@main
+      with:
+        path: Wallet
+        
+        
+    - uses: actions/upload-artifact@v2
+      with:
+        name: wallet-windows
+        path: Wallet/dist/windows
+        
+    - uses: actions/upload-artifact@v2
+      with:
+        name: wallet-linux
+        path: Wallet/dist/linux
+
+        
+  sign:
+    needs: build
+    runs-on: windows-latest
+    steps:
+    - uses: actions/download-artifact@v2
+      with:
+        name: wallet-windows
+        path: unsigned
+        
+    - name: Copy unsigned exe
+      uses: canastro/copy-file-action@master
+      with:
+        source: "unsigned/wallet.exe"
+        target: "signed/wallet.exe"
+
+    - uses: Dana-Woo/code-sign-action@v4
+      with:
+        certificate: '${{ secrets.CERTIFICATE }}'
+        password: '${{ secrets.PASSWORD }}'
+        folder: 'signed'
+        
+    - uses: actions/upload-artifact@v2
+      with:
+        name: wallet-windows-signed
+        path: signed
+        
+  release:
+    needs: sign
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v2
+        with:
+          name: wallet-windows
+          path: unsigned
+      
+      - uses: actions/download-artifact@v2
+        with:
+          name: wallet-windows-signed
+          path: signed
+
+      - uses: actions/download-artifact@v2
+        with:
+          name: wallet-linux
+          path: linux
+    
+      - name: "Build & test"
+      - uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+          files: |
+            unsigned/wallet.exe
+            signed/wallet.exe
+            linux/wallet
+            
+          
