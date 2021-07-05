@@ -56,7 +56,12 @@ jobs:
           name: wallet-linux
           path: linux
 
-    
+      - name: copy file
+        uses: canastro/copy-file-action@master
+        with:
+          source: "linux/wallet"
+          target: "linux/wallet-linux"
+          
       - name: "Build & test"
         uses: "marvinpinto/action-automatic-releases@latest"
         with:
@@ -66,6 +71,6 @@ jobs:
           title: Wallet
           files: |
             windows/wallet.exe
-            linux/wallet
+            linux/wallet-linux
             
           
