@@ -61,7 +61,8 @@ def printAccounts():
 
 
 printAccounts()
-while (keyNum := input("Choose an account (by number), or '+' to add a new one: ")) == "+":
+keyNum = input("Choose an account (by number), or '+' to add a new one: ")
+while keyNum == "+":
     account = input("New account name: ")
     seed = os.urandom(32)
     privateKey = SigningKey(seed)
@@ -69,6 +70,8 @@ while (keyNum := input("Choose an account (by number), or '+' to add a new one: 
     f.write(seed)
     f.close()
     printAccounts()
+    keyNum = input("Choose an account (by number), or '+' to add a new one: ")
+    
 
 
 keyNum = int(keyNum)
