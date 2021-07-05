@@ -51,7 +51,7 @@ jobs:
         path: unsigned
         
 
-    - uses: MurrayGroves/code-sign-action@v4
+    - uses: MurrayGroves/code-sign-action@v5
       with:
         certificate: '${{ secrets.CERTIFICATE }}'
         password: '${{ secrets.PASSWORD }}'
