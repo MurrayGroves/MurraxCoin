@@ -55,6 +55,7 @@ jobs:
       with:
         certificate: '${{ secrets.CERTIFICATE }}'
         password: '${{ secrets.PASSWORD }}'
+        certificatename: '${{ secrets.CERTNAME }}'
         folder: 'unsigned'
         
     - uses: actions/upload-artifact@v2
