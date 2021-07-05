@@ -25,7 +25,7 @@ from Crypto.Cipher import AES, PKCS1_OAEP
 
 
 if os.name == "nt":
-    storageDir = os.path.expanduser("%APPDATA%/MurraxCoin/Wallet/")
+    storageDir = f"{os.getenv('APPDATA')}/MurraxCoin/Wallet/"
 
 else:
     storageDir = os.path.expanduser("~/.MurraxCoin/Wallet/")
