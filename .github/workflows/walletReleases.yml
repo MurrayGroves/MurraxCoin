@@ -56,7 +56,7 @@ jobs:
           
     - name: Build app
       run: |
-        pyinstaller --windowed --onefile --clean -y --dist Wallet/dist/mac --workpath /tmp Wallet/wallet.spec
+        pyinstaller --windowed --onedir --clean -y --dist Wallet/dist/mac --workpath /tmp Wallet/wallet.spec
 
     - uses: actions/upload-artifact@v2
       with:
