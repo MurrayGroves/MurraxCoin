@@ -39,6 +39,29 @@ jobs:
       with:
         name: wallet-linux
         path: Wallet/dist/linux
+        
+  build-mac:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    
+    - uses: actions/setup-python@v2
+      with:
+        python-version: '3.8'
+        
+    - name: Install dependencies
+      run: |
+          python -m pip install --upgrade pip
+          pip install requirements.txt
+          
+    - name: Build app
+      run: |
+        pyinstaller --windowed --onefile --clean -y --dist Wallet/dist/mac --workpath /tmp Wallet/wallet.spec
+
+    - uses: actions/upload-artifact@v2
+      with:
+        name: wallet-mac
+        path: Wallet/dist/mac
 
         
   release:
@@ -55,6 +78,11 @@ jobs:
         with:
           name: wallet-linux
           path: linux
+          
+      - uses: actions/download-artifact@v2
+        with:
+          name: wallet-mac
+          path: mac
 
       - name: copy file
         uses: canastro/copy-file-action@master
@@ -72,5 +100,6 @@ jobs:
           files: |
             windows/wallet.exe
             linux/wallet-linux
+            mac/wallet.app
             
           
