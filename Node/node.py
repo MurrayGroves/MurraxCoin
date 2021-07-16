@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
 # Configuration Variables
 entrypoints = ["ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
-ledgerDir = "Accounts2/"  # Path to the directory where the ledger will be stored (must end in /)
+ledgerDir = "Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
 privateFile = "../genesis.pem"  # Path of the node's private key
 consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
