@@ -8,7 +8,7 @@ from Crypto.Cipher import AES, PKCS1_OAEP
 
 from node import getHead
 
-ledgerDir = "Accounts/"
+ledgerDir = "data/Accounts/"
 
 
 # Send account heads
