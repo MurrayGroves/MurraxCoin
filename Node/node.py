@@ -670,7 +670,7 @@ async def send(data):
 
     valid = await verifySignature(signature, address, data)
     if not valid:
-        response = {"type": "rejection", "address": "{address}", "id": "{blockID}", "reason": "signature"}
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
 
     preID = data.copy()
     preID.pop("signature")
@@ -930,17 +930,18 @@ async def vote(data, **kwargs):
             return {"type": "confirm", "action": "vote"}
 
     blockType = json.loads(data["block"])["type"]
+    block = json.loads(data["block"])
     if blockType == "send":
-        resp = await send(data["block"])
+        resp = await send(block)
 
     elif blockType == "receive":
-        resp = await receive(data["block"])
+        resp = await receive(block)
 
     elif blockType == "open":
-        resp = await openAccount(data["block"])
+        resp = await openAccount(block)
 
     elif blockType == "change":
-        resp = await change(data["block"])
+        resp = await change(block)
 
     else:
         print(f"Incoming vote block is of unknown type: {data['block']}")
