@@ -135,4 +135,4 @@ Node/encryptionCLient.py
 
 Node/encryption.py
 
-Node/Accounts/
+Node/data/Accounts/

@@ -783,7 +783,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
             print("new balance mismatch")
             return False
 
-        if not await verifyBlock(accounts, sendBlock, usedAsPrevious):
+        if not await verifyBlock(accounts, sendBlock, usedAsPrevious, directory=directory):
             accounts[block["address"]][block["id"]][1] = False
             print("invalid send block")
             return False
@@ -804,7 +804,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
         print("Genesis Block Verified")
         return True
 
-    if await verifyBlock(accounts, prevBlock, usedAsPrevious):
+    if await verifyBlock(accounts, prevBlock, usedAsPrevious, directory=directory):
         accounts[block["address"]][block["id"]][1] = True
         print("Block Verified")
         toReturn = True
@@ -1100,10 +1100,16 @@ async def bootstrap():
     # 5 - Verify those transactions locally
     # 6 - If valid, overwrite stored ledger
     # 7 - If not valid, download from another node
+    try:
+        shutil.rmtree(bootstrapDir)
+    except FileNotFoundError:
+        pass
 
     await copytree(ledgerDir, bootstrapDir)
 
     heads = {}  # Dictionary of account - head_ID mappings
+    print(os.listdir(ledgerDir))
+    print(os.getcwd())
     for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
         head = await getHead(account)
         heads[account] = head["id"]
@@ -1239,8 +1245,7 @@ async def run():
         print("running on secondary")
         myPort = 5858
         entrypoints.append(f"ws://{ip}:6969")
-        global ledgerDir
-        ledgerDir = "Accounts2/"
+
 
     else:
         # No other nodes exist on our network, so boot on the primary port
@@ -1265,9 +1270,10 @@ async def run():
 
     print(f"Booting on {ip}:{myPort}")
     await websockets.serve(bootstrap_server, "0.0.0.0", myPort+1)
-    await updateVotingWeights()
     if len(nodes) != 0:
         await bootstrap()
+        await updateVotingWeights()
+
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
