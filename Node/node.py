@@ -1196,7 +1196,7 @@ async def bootstrap():
                 if ourHead != "":
                     blocks = "\n" + blocks
 
-                f = await aiofiles.open(bootstrapDir, "a+")
+                f = await aiofiles.open(bootstrapDir+account, "a+")
                 await f.write(blocks)
                 await f.close()
 
