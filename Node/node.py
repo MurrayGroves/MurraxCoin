@@ -947,7 +947,7 @@ async def vote(data, **kwargs):
         print(f"Incoming vote block is of unknown type: {data['block']}")
         resp = {"type": "rejection"}
 
-    if json.loads(resp)["type"] == "confirm":
+    if resp["type"] == "confirm":
         valid = True
         print(f"Incoming vote block is valid: {data['block']}")
 
