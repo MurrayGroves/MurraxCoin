@@ -38,6 +38,7 @@ if __name__ == "__main__":
 # Configuration Variables
 entrypoints = ["ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that can be used to "enter" the network.
 ledgerDir = "data/Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
+bootstrapDir = "-Bootstrap/".join(ledgerDir.rsplit("/", 1))
 privateFile = "data/nodeKey"  # Path of the node's private key
 consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
 
@@ -1100,7 +1101,7 @@ async def bootstrap():
     # 6 - If valid, overwrite stored ledger
     # 7 - If not valid, download from another node
 
-    await copytree(ledgerDir, f"{ledgerDir.replace('/','')}-Bootstrap")
+    await copytree(ledgerDir, bootstrapDir)
 
     heads = {}  # Dictionary of account - head_ID mappings
     for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
@@ -1195,16 +1196,16 @@ async def bootstrap():
                 if ourHead != "":
                     blocks = "\n" + blocks
 
-                f = await aiofiles.open(f"{ledgerDir.replace('/','')}-Bootstrap/{account}", "a+")
+                f = await aiofiles.open(bootstrapDir, "a+")
                 await f.write(blocks)
                 await f.close()
 
-        valid = await verifyLedger(f"{ledgerDir.replace('/','')}-Bootstrap/")
+        valid = await verifyLedger(bootstrapDir)
         possibleNodes.pop(possibleNodes.index(node))
         await ws.close()
 
-    await copytree(f"{ledgerDir.replace('/','')}-Bootstrap", ledgerDir)
-    shutil.rmtree(f"{ledgerDir.replace('/','')}-Bootstrap")
+    await copytree(bootstrapDir, ledgerDir)
+    shutil.rmtree(bootstrapDir)
 
 
 # Check if node running on given url
