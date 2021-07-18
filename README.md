@@ -34,7 +34,7 @@ MurraxCoin is heavily inspired by [Nano](https://nano.org) and follows the same 
 - The data directory should also contain an empty directory called `Accounts`
 - 
 ## Docker (recommended)
-`docker run --name MurraxCoin -p 6969:6969 -p 6970:6970 -v /path/to/data:/data --restart unless-stopped ghcr.io/murraygroves/murraxcoin:docker`
+`docker run --name MurraxCoin -p 6969:6969 -p 6970:6970 -v /path/to/data:/data --restart unless-stopped ghcr.io/murraygroves/murraxcoin:main`
 
 ## Python
 `git clone https://github.com/MurrayGroves/MurraxCoin.git`
