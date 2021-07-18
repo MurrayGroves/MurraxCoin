@@ -954,6 +954,7 @@ async def vote(data, **kwargs):
     else:
         valid = False
         print(f"Incoming vote block is invalid: {data['block']}")
+        print(resp)
 
     if valid:
         forAgainst = "for"
