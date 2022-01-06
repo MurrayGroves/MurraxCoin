@@ -685,6 +685,9 @@ async def send(data):
     if float(head["balance"]) < float(data["balance"]):
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
+    if float(data["balance"]) < 0:
+        response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
+
     elif head["id"] != data["previous"]:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidPrevious"}
 
