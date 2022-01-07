@@ -678,14 +678,14 @@ async def send(data):
 
     hasher = BLAKE2b.new(digest_bits=512)
     realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    head = await getHead(address)
     if blockID != realID:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
 
-    head = await getHead(address)
-    if float(head["balance"]) < float(data["balance"]):
+    elif float(head["balance"]) < float(data["balance"]):
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
-    if float(data["balance"]) < 0:
+    elif float(data["balance"]) < 0:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
     elif head["id"] != data["previous"]:
