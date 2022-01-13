@@ -1020,7 +1020,7 @@ async def getAccounts(data, ws):
     accountsDir = os.listdir(ledgerDir)
     accounts = {}
     for account in accountsDir:
-        head = getHead(account)
+        head = await getHead(account)
         accounts[account] = head["balance"]
         
     response = {"type": "getAccounts", "accounts": accounts}
