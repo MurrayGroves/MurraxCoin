@@ -1015,6 +1015,18 @@ async def vote(data, **kwargs):
     return {"type": "confirm", "action": "vote"}
 
 
+async def getAccounts(data, ws):
+    """ Get a list of all accounts that have been opened, along with their balance """
+    accountsDir = os.listdir(ledgerDir)
+    accounts = {}
+    for account in accountsDir:
+        head = getHead(account)
+        accounts[account] = head["balance"]
+        
+    response = {"type": "getAccounts", "accounts": accounts}
+    return json.dumps(response)
+    
+
 async def watchForSends(data, ws):
     """ Allows a connection to receive notifications when a given address is sent new MXC.
         Not persistently stored, needs to be re-called if node restarts."""
@@ -1035,7 +1047,7 @@ async def watchForSends(data, ws):
     return resp
 
 
-requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative,  # Relates to accounts
+requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, # Relates to accounts
                     "registerNode": registerNode, "fetchNodes": fetchNodes, "ping": ping, "vote": vote,  # Relates to nodes
                     "receive": initiate, "open": initiate, "send": initiate, "change": initiate}  # Relates to starting transactions
 
