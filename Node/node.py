@@ -1024,7 +1024,7 @@ async def getAccounts(data, ws):
         accounts[account] = head["balance"]
         
     response = {"type": "getAccounts", "accounts": accounts}
-    return json.dumps(response)
+    return response
     
 
 async def watchForSends(data, ws):
