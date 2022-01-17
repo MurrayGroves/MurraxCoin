@@ -426,6 +426,12 @@ async def getBlock(address, blockID, directory=ledgerDir):
 
     print("not found")
 
+async def getBlockRequest(data, ws):
+    address = data["address"]
+    block = data["block"]
+    
+    block = await getBlock(address, block)
+    response = {"type": "getBlock", "block": block}
 
 async def getPrevious(data, **kwargs):
     head = await getHead(data["address"])
@@ -483,6 +489,13 @@ async def getHead(address, directory=ledgerDir,**kwargs):
                     break
 
     return blocks[-1]
+
+
+async def getHeadRequest(data, ws):
+    address = data["address"]
+    block = await getHead(address)
+    response = {"type": "getHead", "block": block}
+    return response
 
 
 async def initiate(data, **kwargs):
@@ -1047,7 +1060,7 @@ async def watchForSends(data, ws):
     return resp
 
 
-requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, # Relates to accounts
+requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, "getBlock": getBlockRequest, "getHead": getHeadRequest, # Relates to accounts
                     "registerNode": registerNode, "fetchNodes": fetchNodes, "ping": ping, "vote": vote,  # Relates to nodes
                     "receive": initiate, "open": initiate, "send": initiate, "change": initiate}  # Relates to starting transactions
 
