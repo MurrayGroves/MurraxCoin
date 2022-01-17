@@ -432,6 +432,7 @@ async def getBlockRequest(data, ws):
     
     block = await getBlock(address, block)
     response = {"type": "getBlock", "block": block}
+    return response
 
 async def getPrevious(data, **kwargs):
     head = await getHead(data["address"])
