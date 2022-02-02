@@ -685,6 +685,7 @@ async def send(data):
     valid = await verifySignature(signature, address, data)
     if not valid:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
+        return response
 
     preID = data.copy()
     preID.pop("signature")
