@@ -427,6 +427,13 @@ async def getBlock(address, blockID, directory=ledgerDir):
 
     print("not found")
 
+async def getBlockRequest(data, ws):
+    address = data["address"]
+    block = data["block"]
+    
+    block = await getBlock(address, block)
+    response = {"type": "getBlock", "block": block}
+    return response
 
 async def getPrevious(data, **kwargs):
     head = await getHead(data["address"])
@@ -484,6 +491,13 @@ async def getHead(address, directory=ledgerDir,**kwargs):
                     break
 
     return blocks[-1]
+
+
+async def getHeadRequest(data, ws):
+    address = data["address"]
+    block = await getHead(address)
+    response = {"type": "getHead", "block": block}
+    return response
 
 
 async def initiate(data, **kwargs):
@@ -672,6 +686,7 @@ async def send(data):
     valid = await verifySignature(signature, address, data)
     if not valid:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
+        return response
 
     preID = data.copy()
     preID.pop("signature")
@@ -679,14 +694,14 @@ async def send(data):
 
     hasher = BLAKE2b.new(digest_bits=512)
     realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
+    head = await getHead(address)
     if blockID != realID:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
 
-    head = await getHead(address)
-    if float(head["balance"]) < float(data["balance"]):
+    elif float(head["balance"]) < float(data["balance"]):
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
-    if float(data["balance"]) < 0:
+    elif float(data["balance"]) < 0:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "balance"}
 
     elif head["id"] != data["previous"]:
@@ -1016,6 +1031,18 @@ async def vote(data, **kwargs):
     return {"type": "confirm", "action": "vote"}
 
 
+async def getAccounts(data, ws):
+    """ Get a list of all accounts that have been opened, along with their balance """
+    accountsDir = os.listdir(ledgerDir)
+    accounts = {}
+    for account in accountsDir:
+        head = await getHead(account)
+        accounts[account] = head["balance"]
+        
+    response = {"type": "getAccounts", "accounts": accounts}
+    return response
+    
+
 async def watchForSends(data, ws):
     """ Allows a connection to receive notifications when a given address is sent new MXC.
         Not persistently stored, needs to be re-called if node restarts."""
@@ -1036,7 +1063,7 @@ async def watchForSends(data, ws):
     return resp
 
 
-requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative,  # Relates to accounts
+requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, "getBlock": getBlockRequest, "getHead": getHeadRequest, # Relates to accounts
                     "registerNode": registerNode, "fetchNodes": fetchNodes, "ping": ping, "vote": vote,  # Relates to nodes
                     "receive": initiate, "open": initiate, "send": initiate, "change": initiate}  # Relates to starting transactions
 
