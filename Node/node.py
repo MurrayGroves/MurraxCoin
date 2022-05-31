@@ -135,7 +135,8 @@ class websocketSecure:
         print("Data: " + handshakeData)
         handshakeData = json.loads(handshakeData)
 
-        sessionKey = bytes.fromhex(handshakeData["sessionKey"])
+        sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('ascii'))
+        #sessionKey = bytes.fromhex(handshakeData["sessionKey"])
         self.sessionKey = handshakeCipher.decrypt(sessionKey)
 
     @classmethod
@@ -155,17 +156,17 @@ class websocketSecure:
     async def recv(self):
         data = await self.websocket.recv()
         ciphertext, tag, nonce = data.split("|||")
-        ciphertext, tag, nonce = bytes.fromhex(ciphertext), bytes.fromhex(tag), bytes.fromhex(nonce)
+        ciphertext, tag, nonce = base64.b64decode(ciphertext).decode("ascii"), base64.b64decode(tag).decode("ascii"), base64.b64decode(nonce).decode("ascii")
         cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
         plaintext = cipher.decrypt_and_verify(ciphertext, tag)
-        plaintext = plaintext.decode("utf-8")
+        plaintext = plaintext.decode("ascii")
 
         return plaintext
 
     async def send(self, plaintext):
         cipher = AES.new(self.sessionKey, AES.MODE_EAX)
-        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
-        await self.websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher.nonce.hex())
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("ascii"))
+        await self.websocket.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher.nonce).decode("ascii"))
 
     async def close(self):
         await self.websocket.close()
@@ -259,8 +260,8 @@ async def broadcast(data, **kwargs):
                         try:
                             session_key = sessionKeys[ws]
                             cipher_aes = AES.new(session_key, AES.MODE_EAX)
-                            ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("utf-8"))
-                            await ws.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher_aes.nonce.hex())
+                            ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("ascii"))
+                            await ws.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher_aes.nonce).decode("ascii"))
                             print("sent send alert")
 
                         except websockets.exceptions.ConnectionClosedError:
@@ -1050,7 +1051,8 @@ async def incoming(websocket, path):
     cipher_rsa = PKCS1_OAEP.new(recipientKey)
     enc_session_key = cipher_rsa.encrypt(session_key)
     global sessionKeys
-    sessionKey = enc_session_key.hex()
+    #sessionKey = enc_session_key.hex()
+    sessionKey = base64.b64encode(enc_session_key).decode("ascii")
     sessionKeys[websocket] = session_key
     await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": sessionKey}))
 
@@ -1059,7 +1061,7 @@ async def incoming(websocket, path):
         try:
             data = await websocket.recv()
             ciphertext, tag, nonce = data.split("|||")
-            ciphertext, tag, nonce = bytes.fromhex(ciphertext), bytes.fromhex(tag), bytes.fromhex(nonce)
+            ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("ascii")), base64.b64decode(ciphertext.encode(tag)), base64.b64decode(ciphertext.encode(nonce))
             cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
             data = plaintext.decode("utf-8")
@@ -1080,7 +1082,7 @@ async def incoming(websocket, path):
         response = json.dumps(response)
         cipher_aes = AES.new(session_key, AES.MODE_EAX)
         ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
-        await websocket.send(ciphertext.hex() + "|||" + tag.hex() + "|||" + cipher_aes.nonce.hex())
+        await websocket.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher_aes.nonce).decode("ascii"))
 
 
 # Handles incoming ledger requests
