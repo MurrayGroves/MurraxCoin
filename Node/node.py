@@ -1071,6 +1071,7 @@ requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "get
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
+    print(f"Client handshake started with {websocket.remote_address[0]}")
 
     recipientKey = await websocket.recv()
     recipientKey = RSA.import_key(recipientKey)
