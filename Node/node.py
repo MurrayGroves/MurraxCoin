@@ -13,6 +13,7 @@ import asyncio
 import random
 import shutil
 import sys
+import logging
 import traceback
 
 # Signing
@@ -30,6 +31,13 @@ from Crypto.Cipher import AES, PKCS1_OAEP
 # Address generation
 import base64
 import zlib
+
+try:
+    print(os.environ["debug"])
+    logging.basicConfig(level=logging.DEBUG)
+
+except KeyError:
+    logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
     # Other MurraxCoin components
@@ -132,10 +140,10 @@ class websocketSecure:
             raise TimeoutError
         await self.websocket.send(handshakePublicKeyStr)
         handshakeData = await self.websocket.recv()
-        print("Data: " + handshakeData)
+        logging.debug("Handshake Data: " + handshakeData)
         handshakeData = json.loads(handshakeData)
 
-        sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('ascii'))
+        sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('utf-8'))
         #sessionKey = bytes.fromhex(handshakeData["sessionKey"])
         self.sessionKey = handshakeCipher.decrypt(sessionKey)
 
@@ -156,17 +164,17 @@ class websocketSecure:
     async def recv(self):
         data = await self.websocket.recv()
         ciphertext, tag, nonce = data.split("|||")
-        ciphertext, tag, nonce = base64.b64decode(ciphertext).decode("ascii"), base64.b64decode(tag).decode("ascii"), base64.b64decode(nonce).decode("ascii")
+        ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag), base64.b64decode(nonce)
         cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
         plaintext = cipher.decrypt_and_verify(ciphertext, tag)
-        plaintext = plaintext.decode("ascii")
+        plaintext = plaintext.decode("utf-8")
 
         return plaintext
 
     async def send(self, plaintext):
         cipher = AES.new(self.sessionKey, AES.MODE_EAX)
-        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("ascii"))
-        await self.websocket.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher.nonce).decode("ascii"))
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+        await self.websocket.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher.nonce).decode("utf-8"))
 
     async def close(self):
         await self.websocket.close()
@@ -202,21 +210,19 @@ async def broadcast(data, **kwargs):
             await ws.send('{"type": "ping"}')
             resp = await ws.recv()
             if json.loads(resp)["type"] == "confirm":
-                print("Available", node)
+                logging.debug("Node is available for broadcast: ", node)
                 validNodesStr = validNodesStr + "|" + node
                 validNodes.append(node)
 
         except Exception as e:
-            print("Error: " + str(e))
+            logging.info("Error while contacting a node for broadcast: " + str(e))
             pass
 
     packet = {"type": "vote", "voteID": broadcastID, "vote": "for", "block": json.dumps(data), "address": publicKeyStr}
     signature = await genSignature(packet, privateKey)
-    print(signature)
-    print("Broadcast: " + json.dumps(packet))
+    logging.info("Broadcasting: " + json.dumps(packet))
     packet["signature"] = signature
 
-    print(publicKeyStr)
     weight = await balance({"address": publicKeyStr})
     weight = float(weight["balance"])
 
@@ -229,10 +235,10 @@ async def broadcast(data, **kwargs):
             resp = await ws.recv()
             offline = False
             if json.loads(resp)["type"] == "confirm":
-                print("Available", node)
+                logging.debug("Node is available for broadcast: ", node)
 
         except Exception as e:
-            print("Error: " + str(e))
+            logging.debug("Error while contacting a node for broadcast: " + str(e))
             nodes.pop(node)
             pass
         onlineWeight += nodes[node][2]
@@ -243,10 +249,10 @@ async def broadcast(data, **kwargs):
 
     votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
-        print("Consensus reached: " + str(votePool[broadcastID]))
+        logging.info("Consensus reached: " + str(votePool[broadcastID]))
+        logging.info("Transaction: " + data)
         if data["type"] != "open":
             if data["type"] == "send":
-
                 if data["link"] in sendSubscriptions:
                     head = await getHead(data["address"])
                     sendAlert = {"type": "sendAlert", "address": data["link"],
@@ -260,12 +266,12 @@ async def broadcast(data, **kwargs):
                         try:
                             session_key = sessionKeys[ws]
                             cipher_aes = AES.new(session_key, AES.MODE_EAX)
-                            ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("ascii"))
-                            await ws.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher_aes.nonce).decode("ascii"))
-                            print("sent send alert")
+                            ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("utf-8"))
+                            await ws.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher_aes.nonce).decode("utf-8"))
+                            logging.info("Sent a send alert for that transaction")
 
                         except websockets.exceptions.ConnectionClosedError:
-                            print("Send subscription unavailable")
+                            logging.info("Send subscription unavailable")
                             pass
             f = await aiofiles.open(f"{ledgerDir}{data['address']}", "a")
             await f.write("\n" + json.dumps(data))
@@ -286,14 +292,14 @@ async def broadcast(data, **kwargs):
             if resp["type"] != "confirm":
                 raise Exception(f"Invalid response: {json.dumps(resp)}")
 
-            print("Vote received by ", node)
+            logging.info("Vote received by ", node)
 
         except TimeoutError:
-            print("Vote not received by ", node)
+            logging.info("Vote not received by ", node)
 
         except Exception as e:
-            print("Exception while receiving vote confirmation")
-            print(e)
+            logging.warning("Exception while receiving vote confirmation")
+            logging.debug(e)
 
 
 # Return any send transactions that have not been received by an account
@@ -425,7 +431,7 @@ async def getBlock(address, blockID, directory=ledgerDir):
         if block["id"] == blockID:
             return block
 
-    print("not found")
+    logging.info(f"Block not found: {address}, {blockID}, {directory}")
 
 async def getBlockRequest(data, ws):
     address = data["address"]
@@ -615,8 +621,6 @@ async def receive(data):
 
     head = await getHead(address)
     if float(data["balance"]) != float(head["balance"]) + float(sendAmount):
-        print(data["balance"])
-        print(float(head["balance"]) + float(sendAmount))
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "invalidBalance"}
 
     elif data["previous"] != head["id"]:
@@ -632,34 +636,31 @@ async def receive(data):
 async def registerMyself(node, doRespond):
     global myPort
     global ip
-    print(f"Registering with {node}")
+    logging.info(f"Registering with {node}")
     websocket = await websocketSecure.connect(node)
     await websocket.send(f'{{"type": "registerNode", "port": "{myPort}", "address": "{publicKeyStr}","respond": "{str(doRespond)}"}}')
     resp = await websocket.recv()
     if json.loads(resp)["type"] == "confirm":
-        print(f"Node registered with: {node}")
+        logging.info(f"Node registered with: {node}")
         global nodes
         nodes[node][0] = websocket
 
         await websocket.send('{"type": "fetchNodes"}')
         newNodes = await websocket.recv()
-        print(newNodes)
+        logging.debug(newNodes)
         newNodes = json.loads(newNodes)["nodes"].split("|")[1:]
-        print(newNodes)
+        logging.debug(newNodes)
         for node in newNodes:
             nodeIP = node.replace("ws://", "").split(":")[0]
-            print(nodeIP)
-            print(myPort)
-            print(node.split(":")[2])
             isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
             if node not in nodes and not isLocalMachine:
                 await registerMyself(node, doRespond=True)
 
     else:
         await websocket.close()
-        print(f"Failed to register with: {node}")
+        logging.debug(f"Failed to register with: {node}")
 
-    print("Done registering")
+    logging.debug("Done registering")
 
 
 async def registerNode(data, ws):
@@ -757,6 +758,7 @@ async def verifySignature(signature, publicKey, data):
 
 # Verify given block in dictionary accounts recursively
 async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
+    logging.debug(f"Verifying block: {block}")
     if accounts[block["address"]][block["id"]][1]:
         return True
 
@@ -767,14 +769,14 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
     # check if previous block is already cited as previous by another block
     if (block["address"] + "/" + block["previous"]) in usedAsPrevious:
         accounts[block["address"]][block["id"]][1] = False
-        print("previous already used")
+        logging.debug("previous already used (double spend)")
         return False
 
     # verify signature
     validSig = await verifySignature(block["signature"], block["address"], block)
     if not validSig:
         accounts[block["address"]][block["id"]][1] = False
-        print("invalid signature")
+        logging.debug("invalid signature")
         return False
 
     if block["type"] != "open" and block["type"] != "genesis":
@@ -784,7 +786,7 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
     if block["type"] == "send":
         if float(prevBlock["balance"]) < float(block["balance"]):
             accounts[block["address"]][block["id"]][1] = False
-            print("New balance is too large")
+            logging.debug("New balance is too large (stealing send)")
             return False
 
     # if receive/open block, calculate the send amount and check if the new balance matches
@@ -799,38 +801,38 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
 
         if block["balance"] != previousBalance + sendAmount:
             accounts[block["address"]][block["id"]][1] = False
-            print("new balance mismatch")
+            logging.debug("new balance mismatch (received incorrect amount)")
             return False
 
         if not await verifyBlock(accounts, sendBlock, usedAsPrevious, directory=directory):
             accounts[block["address"]][block["id"]][1] = False
-            print("invalid send block")
+            logging.debug("invalid send block")
             return False
 
     if block["type"] == "genesis":
         if block["signature"] != "0xbc9accb157a6c23403cc6f7d5be7f4ef77e04a38517a2105719eb1ad784ebee2479f128403e5a826b82c150ca48ce548009c9bc529f649f63dd104bd140951a":
             accounts[block["address"]][block["id"]][1] = False
-            print("FAKE GENESIS DETECTED")
+            logging.warning("FAKE GENESIS DETECTED, our ledger is completely invalid.")
             return False
 
     if block["type"] == "open":
         accounts[block["address"]][block["id"]][1] = True
-        print("Open Block Verified")
+        logging.debug("Open Block Verified")
         return True
 
     if block["type"] == "genesis":
         accounts[block["address"]][block["id"]][1] = True
-        print("Genesis Block Verified")
+        logging.debug("Genesis Block Verified")
         return True
 
     if await verifyBlock(accounts, prevBlock, usedAsPrevious, directory=directory):
         accounts[block["address"]][block["id"]][1] = True
-        print("Block Verified")
+        logging.debug("Block Verified")
         toReturn = True
 
     else:
         accounts[block["address"]][block["id"]][1] = False
-        print("Previous block is invalid")
+        logging.debug("Previous block is invalid")
         toReturn = False
 
     usedAsPrevious.append(block["address"] + "/" + prevBlock["id"])
@@ -865,11 +867,10 @@ async def verifyLedger(directory):
     for accountName in accountNames:
         for block in accounts[accountName]:
             if not accounts[accountName][block][1]:
-                print("BLOCK NOT VALID!!!!!")
-                print(f"{accountName}/{block}")
+                logging.error(f"One of the blocks in our ledger is invalid! {accountName}/{block}")
                 return False
 
-    print("Ledger Verified!")
+    logging.info("Ledger Verified!")
     return True
 
 
@@ -891,9 +892,9 @@ async def vote(data, **kwargs):
     if data["vote"] == "against":
         weight *= -1
 
-    print("VoteID: " + data["voteID"])
-    print(votePool.keys())
-    print(data["voteID"] in votePool)
+    logging.debug("VoteID: " + data["voteID"])
+    logging.debug(votePool.keys())
+    logging.debug(data["voteID"] in votePool)
     if data["voteID"] in votePool:  # Vote is already in pool so just update
         for ballot in votePool[data["voteID"]][3]:
             if data["address"] == ballot[0]["address"]:  # Address has already voted
@@ -902,7 +903,7 @@ async def vote(data, **kwargs):
         votePool[data["voteID"]][1] += weight
         votePool[data["voteID"]][3].append([data, weight])
         if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
-            print("Consensus reached: " + str(votePool[data["voteID"]]))
+            logging.debug("Consensus reached: " + str(votePool[data["voteID"]]))
             if data["block"]["type"] != "open":
                 f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
                 await f.write("\n" + data["block"])
@@ -924,10 +925,10 @@ async def vote(data, **kwargs):
             resp = await ws.recv()
             offline = False
             if json.loads(resp)["type"] == "confirm":
-                print("Available", node)
+                logging.debug("Node available to receive vote", node)
 
         except Exception as e:
-            print("Error: " + str(e))
+            logging.info("Error while contacting node for vote: " + str(e))
             nodes.pop(node)
             pass
         onlineWeight += nodes[node][2]
@@ -938,7 +939,7 @@ async def vote(data, **kwargs):
 
     votePool[data["voteID"]] = [onlineWeight * consensusPercent, weight, json.loads(data["block"]), [[data, weight]], False]
     if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
-        print("Consensus reached: " + str(votePool[data["voteID"]]))
+        logging.debug("Consensus reached: " + str(votePool[data["voteID"]]))
         f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
         await f.write("\n" + data["block"])
         await f.close()
@@ -963,17 +964,17 @@ async def vote(data, **kwargs):
         resp = await change(block)
 
     else:
-        print(f"Incoming vote block is of unknown type: {data['block']}")
+        logging.debug(f"Incoming vote block is of unknown type: {data['block']}")
         resp = {"type": "rejection"}
 
     if resp["type"] == "confirm":
         valid = True
-        print(f"Incoming vote block is valid: {data['block']}")
+        logging.debug(f"Incoming vote block is valid: {data['block']}")
 
     else:
         valid = False
-        print(f"Incoming vote block is invalid: {data['block']}")
-        print(resp)
+        logging.debug(f"Incoming vote block is invalid: {data['block']}")
+        logging.debug(resp)
 
     if valid:
         forAgainst = "for"
@@ -989,7 +990,7 @@ async def vote(data, **kwargs):
     votePool[data["voteID"]][3].append([packet, votingWeights[publicKeyStr]])
 
     if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
-        print("Consensus reached: " + str(votePool[data["voteID"]]))
+        logging.debug("Consensus reached: " + str(votePool[data["voteID"]]))
         f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
         await f.write("\n" + data["block"])
         await f.close()
@@ -1003,12 +1004,12 @@ async def vote(data, **kwargs):
             await ws.send('{"type": "ping"}')
             resp = await ws.recv()
             if json.loads(resp)["type"] == "confirm":
-                print("Available", node)
+                logging.debug("Available", node)
                 validNodesStr = validNodesStr + "|" + node
                 validNodes.append(node)
 
         except Exception as e:
-            print("Error: " + str(e))
+            logging.debug("Error: " + str(e))
             pass
 
     for node in validNodes:
@@ -1019,14 +1020,14 @@ async def vote(data, **kwargs):
             if resp["type"] != "confirm":
                 raise Exception(f"Invalid response: {json.dumps(resp)}")
 
-            print("Vote received by ", node)
+            logging.debug("Vote received by ", node)
 
         except TimeoutError:
-            print("Vote not received by ", node)
+            logging.debug("Vote not received by ", node)
 
         except Exception as e:
-            print("Exception while receiving vote confirmation")
-            print(e)
+            logging.debug(f"Exception while receiving vote confirmation from {node}")
+            logging.debug(e)
 
     return {"type": "confirm", "action": "vote"}
 
@@ -1071,7 +1072,7 @@ requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "get
 # Handles incoming websocket connections
 async def incoming(websocket, path):
     global nodes
-    print(f"Client handshake started with {websocket.remote_address[0]}")
+    logging.debug(f"Client handshake started with {websocket.remote_address[0]}")
 
     recipientKey = await websocket.recv()
     recipientKey = RSA.import_key(recipientKey)
@@ -1080,26 +1081,27 @@ async def incoming(websocket, path):
     enc_session_key = cipher_rsa.encrypt(session_key)
     global sessionKeys
     #sessionKey = enc_session_key.hex()
-    sessionKey = base64.b64encode(enc_session_key).decode("ascii")
+    sessionKey = base64.b64encode(enc_session_key).decode("utf-8")
     sessionKeys[websocket] = session_key
     await websocket.send(json.dumps({"type": "sessionKey", "sessionKey": sessionKey}))
 
-    print(f"Client Connected: {websocket.remote_address[0]}")
+    logging.info(f"Client Connected: {websocket.remote_address[0]}")
     while True:
         try:
             data = await websocket.recv()
             ciphertext, tag, nonce = data.split("|||")
-            ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("ascii")), base64.b64decode(ciphertext.encode(tag)), base64.b64decode(ciphertext.encode(nonce))
+            ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag.encode("utf-8")), base64.b64decode(nonce.encode("utf-8"))
             cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
             data = plaintext.decode("utf-8")
 
-        except:
-            print("Client Disconnected")
+        except Exception as e:
+            logging.info(f"Client Disconnected: {websocket.remote_address[0]}")
+            logging.debug(traceback.format_exc())
             break
 
         data = json.loads(data)
-        print(data)
+        logging.info(f"Received Data from {websocket.remote_address[0]}: {data}")
 
         if data["type"] in requestFunctions:
             response = await requestFunctions[data["type"]](data=data, ws=websocket)
@@ -1107,15 +1109,17 @@ async def incoming(websocket, path):
         else:
             response = {"type": "rejection", "reason": "unknown request"}
 
+        logging.info(f"Responding to {websocket.remote_address[0]}: {response}")
+
         response = json.dumps(response)
         cipher_aes = AES.new(session_key, AES.MODE_EAX)
         ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
-        await websocket.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher_aes.nonce).decode("ascii"))
+        await websocket.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher_aes.nonce).decode("utf-8"))
 
 
 # Handles incoming ledger requests
 async def ledgerServer(websocket, url):
-    print("Ledger Requested")
+    logging.info(f"Ledger Requested by {websocket.remote_address[0]}")
     for account in os.listdir(ledgerDir):
         await websocket.send(f"Account:{account}")
         f = await aiofiles.open(ledgerDir + account)
@@ -1135,6 +1139,7 @@ async def bootstrap():
     # 5 - Verify those transactions locally
     # 6 - If valid, overwrite stored ledger
     # 7 - If not valid, download from another node
+
     try:
         shutil.rmtree(bootstrapDir)
     except FileNotFoundError:
@@ -1143,14 +1148,14 @@ async def bootstrap():
     await copytree(ledgerDir, bootstrapDir)
 
     heads = {}  # Dictionary of account - head_ID mappings
-    print(os.listdir(ledgerDir))
-    print(os.getcwd())
+    logging.debug("Existing ledger contents:" + os.listdir(ledgerDir))
+    logging.debug("Current Working Directory:" + os.getcwd())
     for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
         head = await getHead(account)
         heads[account] = head["id"]
 
     newHeads = {}
-    print(nodes)
+    logging.debug("Nodes:" + nodes)
     sortedWeights = reversed(dict(sorted(nodes.items(), key=lambda item: item[1][2])))  # Get a sorted dictionary of ip - weight mappings
     count = 0
     for node in sortedWeights:
@@ -1202,14 +1207,14 @@ async def bootstrap():
 
     possibleNodes = []   # List of nodes who provided the chosen heads
     for node in newHeads:
-        print(newHeads[node])
+        logging.debug(newHeads[node])
         if newHeads[node] == chosenHeads:
             possibleNodes.append(node)
 
     valid = False
     while not valid:
         if len(possibleNodes) <= 0:
-            print("All nodes returned invalid ledgers!!! THIS IS TERRIBLE OH GOD")
+            logging.warning("While bootstrapping, all available nodes returned invalid ledgers. Something has gone seriously wrong.")
             sys.exit()
 
         node = random.choice(possibleNodes)
@@ -1277,7 +1282,7 @@ async def run():
     if await testWebsocket(f"ws://{ip}:6969"):
         # A node already exists on our network, so boot on the secondary port
         await websockets.serve(incoming, "0.0.0.0", 5858)
-        print("running on secondary")
+        logging.info("A node already exists on our network on port 6969, so running on port 5858 instead.")
         myPort = 5858
         entrypoints.append(f"ws://{ip}:6969")
 
@@ -1289,7 +1294,7 @@ async def run():
 
     for node in entrypoints:
         if not await testWebsocket(node):
-            print(f"Node not available: {node}")
+            logging.info(f"Entrypoint not available: {node}")
             continue
 
         nodeIP = node.replace("ws://", "").split(":")[0]
@@ -1297,13 +1302,13 @@ async def run():
         nodeIP = socket.gethostbyname(nodeIP)
         isLocalMachine = (nodeIP == "localhost" or nodeIP == "127.0.0.1" or nodeIP == ip) and str(myPort) == str(node.split(":")[2])
         if isLocalMachine:
-            print(f"I am that node!")
+            logging.debug(f"Ignoring entrypoint, because it's me.")
             continue
 
         await registerMyself(f"ws://{nodeIP}:{nodePort}", doRespond=True)
 
 
-    print(f"Booting on {ip}:{myPort}")
+    logging.info(f"Booting on {ip}:{myPort}")
     await websockets.serve(bootstrap_server, "0.0.0.0", myPort+1)
     if len(nodes) != 0:
         await bootstrap()

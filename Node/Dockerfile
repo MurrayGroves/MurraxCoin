@@ -9,4 +9,4 @@ RUN ln -s /data MurraxCoin/Node
 
 RUN pip install -r MurraxCoin/requirements.txt
 WORKDIR MurraxCoin/Node
-ENTRYPOINT python3 node.py
+ENTRYPOINT python3 -u node.py

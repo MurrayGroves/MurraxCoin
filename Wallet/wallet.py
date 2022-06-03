@@ -6,6 +6,7 @@ import json
 from aioconsole import ainput
 import os
 import traceback
+import logging
 
 from Crypto.PublicKey import ECC
 from Crypto.Hash import SHA256
@@ -17,6 +18,12 @@ from nacl.signing import SigningKey
 import base64
 import zlib
 
+try:
+    print(os.environ["debug"])
+    logging.basicConfig(level=logging.DEBUG)
+
+except KeyError:
+    logging.basicConfig(level=logging.INFO)
 
 websocketPool = {}
 
@@ -117,7 +124,7 @@ class websocketSecure:
         handshakeData = await self.websocket.recv()
         handshakeData = json.loads(handshakeData)
 
-        sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('ascii'))
+        sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('utf-8'))
         #sessionKey = bytes.fromhex(handshakeData["sessionKey"])
         self.sessionKey = handshakeCipher.decrypt(sessionKey)
 
@@ -139,17 +146,17 @@ class websocketSecure:
     async def recv(self):
         data = await self.websocket.recv()
         ciphertext, tag, nonce = data.split("|||")
-        ciphertext, tag, nonce = base64.b64decode(ciphertext).decode("ascii"), base64.b64decode(tag).decode("ascii"), base64.b64decode(nonce).decode("ascii")
+        ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag), base64.b64decode(nonce)
         cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
         plaintext = cipher.decrypt_and_verify(ciphertext, tag)
-        plaintext = plaintext.decode("ascii")
+        plaintext = plaintext.decode("utf-8")
 
         return plaintext
 
     async def send(self, plaintext):
         cipher = AES.new(self.sessionKey, AES.MODE_EAX)
-        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("ascii"))
-        await self.websocket.send(base64.b64encode(ciphertext).decode("ascii") + "|||" + base64.b64encode(tag).decode("ascii") + "|||" + base64.b64encode(cipher.nonce).decode("ascii"))
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
+        await self.websocket.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher.nonce).decode("utf-8"))
 
 
     async def close(self):
@@ -270,12 +277,14 @@ async def ping():
 
 async def main():
     global websocket
-    uri = "ws://murraxcoin.murraygrov.es:6969"
+    uri = "ws://localhost:6969"
     websocket = await websocketSecure.connect(uri)
+    logging.debug(f"Connected to node at {uri}")
 
     asyncio.create_task(websocketPoolLoop())
 
     await ping()
+    logging.debug("Node responded to ping")
 
     resp = await wsRequest(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
     resp = json.loads(resp)
