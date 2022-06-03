@@ -140,7 +140,7 @@ class websocketSecure:
             raise TimeoutError
         await self.websocket.send(handshakePublicKeyStr)
         handshakeData = await self.websocket.recv()
-        logging.debug("Handshake Data: " + handshakeData)
+        logging.debug(f"Handshake Data: {handshakeData}")
         handshakeData = json.loads(handshakeData)
 
         sessionKey = base64.b64decode(handshakeData["sessionKey"].encode('utf-8'))
@@ -250,7 +250,7 @@ async def broadcast(data, **kwargs):
     votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
         logging.info("Consensus reached: " + str(votePool[broadcastID]))
-        logging.info("Transaction: " + data)
+        logging.info(f"Transaction: {data}")
         if data["type"] != "open":
             if data["type"] == "send":
                 if data["link"] in sendSubscriptions:
@@ -892,7 +892,7 @@ async def vote(data, **kwargs):
     if data["vote"] == "against":
         weight *= -1
 
-    logging.debug("VoteID: " + data["voteID"])
+    logging.debug(f"VoteID: { data['voteID']}")
     logging.debug(votePool.keys())
     logging.debug(data["voteID"] in votePool)
     if data["voteID"] in votePool:  # Vote is already in pool so just update
@@ -1148,14 +1148,14 @@ async def bootstrap():
     await copytree(ledgerDir, bootstrapDir)
 
     heads = {}  # Dictionary of account - head_ID mappings
-    logging.debug("Existing ledger contents:" + os.listdir(ledgerDir))
-    logging.debug("Current Working Directory:" + os.getcwd())
+    logging.debug(f"Existing ledger contents: {os.listdir(ledgerDir)}")
+    logging.debug(f"Current Working Directory: {os.getcwd()}")
     for account in os.listdir(ledgerDir):  # Iterate through all stored accounts
         head = await getHead(account)
         heads[account] = head["id"]
 
     newHeads = {}
-    logging.debug("Nodes:" + nodes)
+    logging.debug(f"Nodes: {nodes}")
     sortedWeights = reversed(dict(sorted(nodes.items(), key=lambda item: item[1][2])))  # Get a sorted dictionary of ip - weight mappings
     count = 0
     for node in sortedWeights:
