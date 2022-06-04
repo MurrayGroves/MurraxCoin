@@ -277,7 +277,7 @@ async def ping():
 
 async def main():
     global websocket
-    uri = "ws://localhost:6969"
+    uri = "ws://murraxcoin.murraygrov.es:6969"
     websocket = await websocketSecure.connect(uri)
     logging.debug(f"Connected to node at {uri}")
 
