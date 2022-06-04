@@ -165,14 +165,14 @@ class websocketSecure:
         data = await self.websocket.recv()
         ciphertext, tag, nonce = data.split("|||")
         ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag), base64.b64decode(nonce)
-        cipher = AES.new(self.sessionKey, AES.MODE_EAX, nonce)
+        cipher = AES.new(self.sessionKey, AES.MODE_GCM, nonce)
         plaintext = cipher.decrypt_and_verify(ciphertext, tag)
         plaintext = plaintext.decode("utf-8")
 
         return plaintext
 
     async def send(self, plaintext):
-        cipher = AES.new(self.sessionKey, AES.MODE_EAX)
+        cipher = AES.new(self.sessionKey, AES.MODE_GCM)
         ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode("utf-8"))
         await self.websocket.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher.nonce).decode("utf-8"))
 
@@ -265,7 +265,7 @@ async def broadcast(data, **kwargs):
                     for ws in sendSubscriptions[data["link"]]:
                         try:
                             session_key = sessionKeys[ws]
-                            cipher_aes = AES.new(session_key, AES.MODE_EAX)
+                            cipher_aes = AES.new(session_key, AES.MODE_GCM)
                             ciphertext, tag = cipher_aes.encrypt_and_digest(sendAlert.encode("utf-8"))
                             await ws.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher_aes.nonce).decode("utf-8"))
                             logging.info("Sent a send alert for that transaction")
@@ -1091,7 +1091,7 @@ async def incoming(websocket, path):
             data = await websocket.recv()
             ciphertext, tag, nonce = data.split("|||")
             ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag.encode("utf-8")), base64.b64decode(nonce.encode("utf-8"))
-            cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce)
+            cipher_aes = AES.new(session_key, AES.MODE_GCM, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
             data = plaintext.decode("utf-8")
 
@@ -1112,7 +1112,7 @@ async def incoming(websocket, path):
         logging.info(f"Responding to {websocket.remote_address[0]}: {response}")
 
         response = json.dumps(response)
-        cipher_aes = AES.new(session_key, AES.MODE_EAX)
+        cipher_aes = AES.new(session_key, AES.MODE_GCM)
         ciphertext, tag = cipher_aes.encrypt_and_digest(response.encode("utf-8"))
         await websocket.send(base64.b64encode(ciphertext).decode("utf-8") + "|||" + base64.b64encode(tag).decode("utf-8") + "|||" + base64.b64encode(cipher_aes.nonce).decode("utf-8"))
 
