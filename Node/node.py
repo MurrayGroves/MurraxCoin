@@ -535,6 +535,10 @@ async def openAccount(data):
     if not valid:
         toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "signature"}
         return toRespond
+    
+    if os.path.exists(f"{ledgerDir}{address}"):
+        toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "alreadyExists"}
+        return toRespond
 
     preID = data.copy()
     preID.pop("signature")
