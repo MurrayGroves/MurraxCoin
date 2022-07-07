@@ -15,6 +15,7 @@ import shutil
 import sys
 import logging
 import traceback
+import time
 
 # Signing
 from Crypto.PublicKey import ECC
@@ -33,7 +34,7 @@ import base64
 import zlib
 
 try:
-    print(os.environ["debug"])
+    print(f'Debugging enabled: {os.environ["debug"]}')
     logging.basicConfig(level=logging.DEBUG)
 
 except KeyError:
@@ -48,8 +49,18 @@ entrypoints = ["ws://murraxcoin.murraygrov.es:6969"]  # List of known nodes that
 ledgerDir = "data/Accounts/"  # Path to the directory where the ledger will be stored (must end in /)
 bootstrapDir = "-Bootstrap/".join(ledgerDir.rsplit("/", 1))
 privateFile = "data/nodeKey"  # Path of the node's private key
-consensusPercent = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
-
+CONSENSUS_PERCENT = 0.65  # Float representing what percent of the online voting nodes must agree with a transaction for it to be confirmed.
+BLOCK_TIMEOUT = 30  # Seconds before a block will time out if still unconfirmed
+force_valid_blocks = [
+    "e15e7c4f0fcf6ce79203317f83a5a64f6700f0396d27200cbfcab12bdeac5dd8461850db362444cc6b1d3dd07afcbe2b3a19d10a9fecbdd5e6668d21c14031fa",
+    "ee199fee5352e1a24728c077cd0d5761de2660e075b5b648abec6b297e17c4c930995108d2aa80309dd300c47f4d742624d38dda0ee99a5105d3e68afe2310f2",
+    "9417e70de575921e2b6ee220e27ca5e97d637268c2ca13df3363de5a1d5999d2de4009e16b366f4fb186624e3690601340608235a6aba0cd60aa9084cb36cd9f",
+    "33a911e112950f535949938b0ed9f620c945419f7ab83ec77007ff5d3b9a6f97d4e074dc604d25e0f09dd2aceb9ab0a5eeda9742594586cf21682c5eb79f0969",
+    "862cde47e07bba8e927083a0108d473c49aad43ed27834c5f3b8c41d49ed54237302f22008f82dbe98e7b8550a38e7b00d2ada76c8ffb4aa43cd4af4f2599eaf",
+    "1a648280ee9c29afedc18a46c593ca82e77a66e5b9f5128d36a43c25a8c4975ecde72a33ba8fd45bc504facee080796b87287d86b80800e5d383f8eab56a17f8",
+    "37433095547d8067bede4ca5ff193aaa81ec4b3754f844b1d79a79a4020838ff526a30b9cfc05899481803218e999527d74589a63e510a128cafa68e9ad0488f",
+    "1739bccabaddf2384644a362042a939142d35d66940fbe56dae90d01ff4786764a205543cfdb1f7b6caeb0902d569f421520c617f1b5b714f193178d8830618f"
+]  # List of invalid blocks that should be accepted as valid.
 
 try:
     f = open(privateFile, "rb")
@@ -91,12 +102,16 @@ votePool = {}   # Dictionary of all ongoing votes. Structure follows:
                     # address - Str - The MXC address of the voting node.
                     # weight - Float - The voting weight of the voting node. Negative if voting against.
 
+lockedAddresses = {}  # Key is an address that has a pending transaction, hence no new transactions can be submitted. Value is the timestamp at which it will time out.
+
 sessionKeys = {}
 
 ip = -1
 myPort = -1
 
 votingWeights = {}
+
+background_tasks = set()
 
 try:
     f = open("handshake_key.pem", "rb")
@@ -114,6 +129,19 @@ except FileNotFoundError:
 handshakePublicKey = handshakeKey.publickey()
 handshakePublicKeyStr = handshakePublicKey.export_key()
 handshakeCipher = PKCS1_OAEP.new(handshakeKey)
+
+
+class DoublePrevious(Exception):
+    """Raised when the node encounters a transaction that uses a previous that has already been used as a previous"""
+    def __init__(self, block_1, block_2):
+        self.block_1 = block_1
+        self.block_2 = block_2
+
+
+class DuplicateTransaction(Exception):
+    """Raised when a transaction has already been seen"""
+    def __init__(self, block):
+        self.block = block
 
 
 async def copytree(src, dst, symlinks=False, ignore=None):
@@ -178,6 +206,21 @@ class websocketSecure:
 
     async def close(self):
         await self.websocket.close()
+
+
+async def unlock_address(address: str, delay: int):  # Unlocks an address and deletes a pending transaction after it times out
+    await asyncio.sleep(delay)
+    try:
+        lockedAddresses.pop(address)
+        logging.debug(f"Address {address} unlocked")
+    except KeyError:
+        logging.debug(f"Address {address} was not locked")
+
+    for election in votePool.keys():
+        if votePool[election][2]["address"] == address:
+            votePool.pop(election)
+            logging.debug(f"Address {address} removed from the vote pool")
+            break
 
 
 async def balance(data: dict, **kwargs) -> str:
@@ -247,7 +290,7 @@ async def broadcast(data, **kwargs):
         await asyncio.sleep(60)
         os.execv(sys.argv[0], sys.argv)
 
-    votePool[broadcastID] = [onlineWeight*consensusPercent, weight, data, [[packet, weight]], False]
+    votePool[broadcastID] = [onlineWeight*CONSENSUS_PERCENT, weight, data, [[packet, weight]], False]
     if votePool[broadcastID][1] >= votePool[broadcastID][0]:
         logging.info("Consensus reached: " + str(votePool[broadcastID]))
         logging.info(f"Transaction: {data}")
@@ -283,6 +326,7 @@ async def broadcast(data, **kwargs):
             await f.close()
 
         votePool[broadcastID][4] = True
+        lockedAddresses.pop(data["address"])
 
     for node in validNodes:
         await nodes[node][0].send(json.dumps(packet))
@@ -462,7 +506,7 @@ async def getRepresentative(data, **kwargs):  # Get address of an account's repr
 
 
 # Get the head block of an account (the most recent block)
-async def getHead(address, directory=ledgerDir,**kwargs):
+async def getHead(address, directory=ledgerDir, **kwargs):
     f = await aiofiles.open(f"{directory}{address}")
     fileStr = await f.read()
     await f.close()
@@ -476,12 +520,21 @@ async def getHead(address, directory=ledgerDir,**kwargs):
     if len(blocks) == 1:
         return blocks[0]
 
+    used_previouses = {}
+
     # Sort blocks in order
     isSorted = False
     while not isSorted:
         isSorted = True
         for i in range(1, len(blocks)):
             previous = blocks[i]["previous"]
+            if previous in used_previouses:
+                if blocks[i] == used_previouses[previous]:
+                    raise DuplicateTransaction(blocks[i])
+
+                raise DoublePrevious(blocks[i], used_previouses[previous])
+
+            used_previouses[previous] = blocks[i]
             if previous == "0"*20:  # if broken, change to 145
                 blocks.insert(0, blocks.pop(i))
                 continue
@@ -519,8 +572,18 @@ async def initiate(data, **kwargs):
     else:
         response = await send(data)
 
-    if response["type"] == "confirm":
+    locked = data["address"] in lockedAddresses
+
+    if response["type"] == "confirm" and not locked:
+        lockedAddresses[data["address"]] = int(time.time()) + BLOCK_TIMEOUT  # Time out transaction after 30 seconds of being unconfirmed.
+        task = asyncio.create_task(unlock_address(data["address"], BLOCK_TIMEOUT))
+        background_tasks.add(task)  # Prevents it being garbage collected
+        task.add_done_callback(background_tasks.discard)
+
         await broadcast(data)
+
+    elif locked:
+        response = {"type": "rejection", "reason": "This address has a pending transaction.", "latest_unlock_time": lockedAddresses[data["address"]]}
 
     return response
 
@@ -766,6 +829,10 @@ async def verifyBlock(accounts, block, usedAsPrevious=[], directory=ledgerDir):
     if accounts[block["address"]][block["id"]][1]:
         return True
 
+    if block["id"] in force_valid_blocks:
+        accounts[block["address"]][block["id"]][1] = True
+        return True
+
     # I need to clarify why this isn't "if not". "not None" returns True, but in this case I'm using the value None to represent a block which has no status yet and False to represent a block which has been rejected
     if accounts[block["address"]][block["id"]][1] == False:
         return False
@@ -941,7 +1008,7 @@ async def vote(data, **kwargs):
         await asyncio.sleep(60)
         os.execv(sys.argv[0], sys.argv)
 
-    votePool[data["voteID"]] = [onlineWeight * consensusPercent, weight, json.loads(data["block"]), [[data, weight]], False]
+    votePool[data["voteID"]] = [onlineWeight * CONSENSUS_PERCENT, weight, json.loads(data["block"]), [[data, weight]], False]
     if votePool[data["voteID"]][1] >= votePool[data["voteID"]][0] and not votePool[data["voteID"]][4]:
         logging.debug("Consensus reached: " + str(votePool[data["voteID"]]))
         f = await aiofiles.open(f"{ledgerDir}{json.loads(data['block'])['address']}", "a")
@@ -955,7 +1022,12 @@ async def vote(data, **kwargs):
 
     blockType = json.loads(data["block"])["type"]
     block = json.loads(data["block"])
-    if blockType == "send":
+
+    if block["address"] in lockedAddresses:
+        resp = {"type": "rejection", "reason": "This address has a pending transaction.",
+                    "latest_unlock_time": lockedAddresses[data["address"]]}
+
+    elif blockType == "send":
         resp = await send(block)
 
     elif blockType == "receive":
@@ -981,6 +1053,10 @@ async def vote(data, **kwargs):
         logging.debug(resp)
 
     if valid:
+        lockedAddresses[data["address"]] = int(time.time()) + BLOCK_TIMEOUT
+        task = asyncio.create_task(unlock_address(data["address"], BLOCK_TIMEOUT))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
         forAgainst = "for"
 
     else:
@@ -999,6 +1075,7 @@ async def vote(data, **kwargs):
         await f.write("\n" + data["block"])
         await f.close()
         votePool[data["voteID"]][4] = True
+        lockedAddresses.pop(data["address"])
 
     validNodesStr = ""
     validNodes = []
@@ -1280,6 +1357,9 @@ async def run():
     async with aiohttp.ClientSession() as session:
         async with session.get('https://api.ipify.org') as response:
             ip = await response.text()
+
+    print("Verifying ledger... May take a while")
+    print(f"Ledger verified {await verifyLedger(ledgerDir)}")
 
     await updateVotingWeights()
 
