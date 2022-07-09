@@ -554,7 +554,13 @@ async def getHead(address, directory=ledgerDir, **kwargs):
 
 async def getHeadRequest(data, ws):
     address = data["address"]
-    block = await getHead(address)
+    try:
+        block = await getHead(address)
+        
+    except FileNotFoundError:
+        response = {"type": "rejection", "address": f"{address}", "reason": "addressNonExistent"}
+        return response
+    
     response = {"type": "getHead", "block": block}
     return response
 
