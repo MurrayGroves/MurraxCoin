@@ -1181,6 +1181,7 @@ async def incoming(websocket, path):
             cipher_aes = AES.new(session_key, AES.MODE_GCM, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
             data = plaintext.decode("utf-8")
+            logging.debug(data)
 
         except Exception as e:
             logging.info(f"Client Disconnected: {websocket.remote_address[0]}")
