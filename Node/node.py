@@ -1180,8 +1180,8 @@ async def incoming(websocket, path):
             ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag.encode("utf-8")), base64.b64decode(nonce.encode("utf-8"))
             cipher_aes = AES.new(session_key, AES.MODE_GCM, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
-            data = repr(plaintext.decode("utf-8"))
-            logging.debug(data)
+            data = plaintext.decode("utf-8")
+            logging.debug(repr(data))
 
         except Exception as e:
             logging.info(f"Client Disconnected: {websocket.remote_address[0]}")
