@@ -1180,7 +1180,7 @@ async def incoming(websocket, path):
             ciphertext, tag, nonce = base64.b64decode(ciphertext.encode("utf-8")), base64.b64decode(tag.encode("utf-8")), base64.b64decode(nonce.encode("utf-8"))
             cipher_aes = AES.new(session_key, AES.MODE_GCM, nonce)
             plaintext = cipher_aes.decrypt_and_verify(ciphertext, tag)
-            data = plaintext.decode("utf-8")
+            data = plaintext.decode("ascii", errors="ignore")
             logging.debug(repr(data))
 
         except Exception as e:
