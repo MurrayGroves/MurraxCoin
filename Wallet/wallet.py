@@ -103,7 +103,7 @@ try:
 
 except FileNotFoundError:
     handshakeKey = RSA.generate(2048)
-    toWrite = handshakeKey.export_key()
+    toWrite = handshakeKey.export_key(pkcs=8)
     f = open(f"{storageDir}handshake_key.pem", "wb+")
     f.write(toWrite)
     f.close()
