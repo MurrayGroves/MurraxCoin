@@ -178,7 +178,7 @@ class websocketSecure:
     @classmethod
     async def connect(cls, url):
         self = websocketSecure(url)
-        await asyncio.wait({self.initiateConnection()})
+        await self.initiateConnection()
         for i in range(200):
             try:
                 self.sessionKey
@@ -1129,6 +1129,16 @@ async def getAccounts(data, ws):
         
     response = {"type": "getAccounts", "accounts": accounts}
     return response
+
+async def getTransactions(data, ws):
+    """Get a list of all transactions made by an account"""
+    address = data["address"]
+    transactions = []
+    with open(f"{ledgerDir}{address}", "r") as f:
+        for line in f:
+            transactions.append(json.loads(line))
+    response = {"type": "getTransactions", "transactions": transactions}
+    return response
     
 
 async def watchForSends(data, ws):
@@ -1151,7 +1161,7 @@ async def watchForSends(data, ws):
     return resp
 
 
-requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, "getBlock": getBlockRequest, "getHead": getHeadRequest, # Relates to accounts
+requestFunctions = {"balance": balance, "pendingSend": checkForPendingSend, "getPrevious": getPrevious, "watchForSends": watchForSends, "getRepresentative": getRepresentative, "getAccounts": getAccounts, "getBlock": getBlockRequest, "getHead": getHeadRequest, "getTransactions": getTransactions, # Relates to accounts
                     "registerNode": registerNode, "fetchNodes": fetchNodes, "ping": ping, "vote": vote,  # Relates to nodes
                     "receive": initiate, "open": initiate, "send": initiate, "change": initiate}  # Relates to starting transactions
 
@@ -1184,6 +1194,9 @@ async def incoming(websocket, path):
             data = ''.join(c for c in data if c.isprintable())
             logging.debug(repr(data))
 
+        except websockets.exceptions.ConnectionClosedOK:
+            logging.info(f"Client Disconnected: {websocket.remote_address[0]}")
+            break
         except Exception as e:
             logging.info(f"Client Disconnected: {websocket.remote_address[0]}")
             logging.debug(traceback.format_exc())
@@ -1346,12 +1359,19 @@ async def bootstrap():
 # Check if node running on given url
 async def testWebsocket(url):
     try:
-        websocket = await asyncio.wait_for(websocketSecure.connect(url), 3)
-        await websocket.send('{"type": "ping"}')
-        await websocket.recv()
-        await websocket.close()
+        async def wait_for_this(url):
+            try:
+                websocket = await websocketSecure.connect(url)
+            except TimeoutError:
+                return False
+            
+            await websocket.send('{"type": "ping"}')
+            await websocket.recv()
+            await websocket.close()
 
-        return True
+            return True
+
+        return await asyncio.wait_for(wait_for_this(url), 3)
 
     except:
         return False
@@ -1385,6 +1405,7 @@ async def run():
         myPort = 6969
 
     for node in entrypoints:
+        logging.debug(f"Testing entrypoint: {node}")
         if not await testWebsocket(node):
             logging.info(f"Entrypoint not available: {node}")
             continue
@@ -1397,6 +1418,7 @@ async def run():
             logging.debug(f"Ignoring entrypoint, because it's me.")
             continue
 
+        logging.info(f"Registering with {node}")
         await registerMyself(f"ws://{nodeIP}:{nodePort}", doRespond=True)
 
 
