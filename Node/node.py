@@ -481,12 +481,25 @@ async def getBlockRequest(data, ws):
     address = data["address"]
     block = data["block"]
     
-    block = await getBlock(address, block)
+    try:
+        block = await getBlock(address, block)
+    
+    except FileNotFoundError:
+        return {"type": "rejection", "originalRequest": "getBlock", "address": address, "block": block, "reason": "accountNonExistent"}
+    
+    if block == None:
+        return {"type": "rejection", "originalRequest": "getBlock", "address": address, "block": block, "reason": "blockNonExistent"}
+    
     response = {"type": "getBlock", "block": block}
     return response
 
 async def getPrevious(data, **kwargs):
-    head = await getHead(data["address"])
+    try:
+        head = await getHead(data["address"])
+
+    except FileNotFoundError:
+        return {"type": "rejection", "originalRequest": "getPrevious", address: data["address"], "reason": "accountNonExistent"}
+    
     address = data["address"]
     previous = head["id"]
     response = {"type": "previous", "address": address, "link": previous}
@@ -499,8 +512,8 @@ async def getRepresentative(data, **kwargs):  # Get address of an account's repr
         head = await getHead(address)
         representative = head["representative"]
 
-    except:
-        representative = address
+    except FileNotFoundError:
+        return {"type": "rejection", "originalRequest": "getRepresentative", address: address, "reason": "accountNonExistent"}
 
     return {"type": "info", "address": address, "representative": representative}
 
@@ -677,9 +690,14 @@ async def receive(data):
         toRespond = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "sendSignature"}
         return toRespond
 
-    f = await aiofiles.open(f"{ledgerDir}{address}")
-    blocks = await f.read()
-    await f.close()
+    try:
+        f = await aiofiles.open(f"{ledgerDir}{address}")
+        blocks = await f.read()
+        await f.close()
+
+    except FileNotFoundError:
+        return {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "addressNonExistent"}
+    
     blocks = blocks.splitlines()
     for block in blocks:
         if json.loads(block)["type"] == "genesis":
@@ -768,7 +786,11 @@ async def send(data):
 
     hasher = BLAKE2b.new(digest_bits=512)
     realID = hasher.update(json.dumps(preID).encode("utf-8")).hexdigest()
-    head = await getHead(address)
+    try:
+        head = await getHead(address)
+    except FileNotFoundError:
+        return {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "addressNonExistent"}
+
     if blockID != realID:
         response = {"type": "rejection", "address": f"{address}", "id": f"{blockID}", "reason": "id"}
 
@@ -1134,9 +1156,14 @@ async def getTransactions(data, ws):
     """Get a list of all transactions made by an account"""
     address = data["address"]
     transactions = []
-    with open(f"{ledgerDir}{address}", "r") as f:
-        for line in f:
-            transactions.append(json.loads(line))
+    try:
+        with open(f"{ledgerDir}{address}", "r") as f:
+            for line in f:
+                transactions.append(json.loads(line))
+
+    except FileNotFoundError:
+        return {"type": "getTransactions", "transactions": [], "softError": "addressNonExistent"}
+    
     response = {"type": "getTransactions", "transactions": transactions}
     return response
     
@@ -1206,7 +1233,12 @@ async def incoming(websocket, path):
         logging.info(f"Received Data from {websocket.remote_address[0]}: {data}")
 
         if data["type"] in requestFunctions:
-            response = await requestFunctions[data["type"]](data=data, ws=websocket)
+            try:
+                response = await requestFunctions[data["type"]](data=data, ws=websocket)
+            
+            except Exception as e:
+                logging.debug(traceback.format_exc())
+                response = {"type": "rejection", "reason": "internal server error"}
 
         else:
             response = {"type": "rejection", "reason": "unknown request"}
