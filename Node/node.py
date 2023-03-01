@@ -232,11 +232,10 @@ async def balance(data: dict, **kwargs) -> str:
         block = await getHead(address)
 
     except FileNotFoundError:
-        response = {"type": "rejection", "address": f"{address}", "reason": "addressNonExistent"}
+        response = {"type": "info", "address": address, "balance": 0.0, "softError": "addressNonExistent"}
         return response
 
-    response = {"type": "info", "address": address, "balance": f"{block['balance']}"}
-    return response
+    return {"type": "info", "address": address, "balance": float(block['balance'])}
 
 
 async def broadcast(data, **kwargs):
