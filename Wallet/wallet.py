@@ -194,7 +194,6 @@ async def receive(sendAmount, block):
         previous = "0" * 20
 
     response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
-    print(response)
     representative = json.loads(response)["representative"]
 
     block = {"type": f"{blockType}", "previous": f"{previous}", "address": f"{publicKeyStr}",

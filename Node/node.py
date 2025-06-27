@@ -512,7 +512,8 @@ async def getRepresentative(data, **kwargs):  # Get address of an account's repr
         representative = head["representative"]
 
     except FileNotFoundError:
-        return {"type": "rejection", "originalRequest": "getRepresentative", "address": address, "reason": "accountNonExistent"}
+        # Return representative as current node if account doesn't exist
+        return {"type": "info", "address": address, "representative": publicKeyStr, "softError": "addressNonExistent"}
 
     return {"type": "info", "address": address, "representative": representative}
 
