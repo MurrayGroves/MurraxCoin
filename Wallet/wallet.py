@@ -131,7 +131,7 @@ class websocketSecure:
     @classmethod
     async def connect(cls, url):
         self = websocketSecure(url)
-        await asyncio.wait({self.initiateConnection()})
+        await self.initiateConnection()
         for i in range(200):
             try:
                 self.sessionKey
@@ -182,7 +182,7 @@ async def receive(sendAmount, block):
     resp = await wsRequest(f'{{"type": "balance", "address": "{publicKeyStr}"}}')
     resp = json.loads(resp)
 
-    if resp["type"] != "rejection":
+    if resp.get("softError", "") != "addressNonExistent":
         balance = float(resp["balance"])
         blockType = "receive"
         response = await wsRequest(f'{{"type": "getPrevious", "address": "{publicKeyStr}"}}')
@@ -194,6 +194,7 @@ async def receive(sendAmount, block):
         previous = "0" * 20
 
     response = await wsRequest(json.dumps({"type": "getRepresentative", "address": publicKeyStr}))
+    print(response)
     representative = json.loads(response)["representative"]
 
     block = {"type": f"{blockType}", "previous": f"{previous}", "address": f"{publicKeyStr}",
@@ -365,4 +366,4 @@ async def main():
                 print("MXC delegation change failed to initiate, please see error below:")
                 print(resp)
 
-asyncio.get_event_loop().run_until_complete(main())
+asyncio.run(main())
