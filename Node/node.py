@@ -497,7 +497,7 @@ async def getPrevious(data, **kwargs):
         head = await getHead(data["address"])
 
     except FileNotFoundError:
-        return {"type": "rejection", "originalRequest": "getPrevious", address: data["address"], "reason": "accountNonExistent"}
+        return {"type": "rejection", "originalRequest": "getPrevious", "address": data["address"], "reason": "accountNonExistent"}
     
     address = data["address"]
     previous = head["id"]
